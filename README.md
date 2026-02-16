@@ -6,7 +6,8 @@ A lightweight desktop tool for testing regular expressions and extracting matche
 
 ## Features
 
-- **Live matching** — results update as you type (300 ms debounce)
+- **Live/manual matching** — keep live updates on (300 ms debounce) or turn them off and press **Match** manually for large inputs
+- **Cache & unload mode** — move huge input into a temp cache file so the textbox stays light; restore it later when needed
 - **Match highlighting** — matched regions are highlighted yellow in the input pane
 - **Click-to-jump** — click any output line to scroll to that match in the input
 - **Regex flags** — toggle Ignore Case, Multiline, and Dot All
@@ -29,7 +30,9 @@ python main.py
 
 1. Enter a regex pattern in the top bar.
 2. Paste or type text into the left pane (or click **📋 Paste from Clipboard**).
-3. Matches appear instantly in the right pane, highlighted in the input.
+3. With **Live matching** enabled, matches update as you type; for very large text, disable it and click **Match**.
+4. For extremely large text, click **Cache Input** to unload the textbox, then run matches with **Match**.
+5. Use **Restore Cached** if you need the full source text back in the input pane.
 4. Click a match on the right to jump to it on the left.
 5. Use the bottom buttons to copy results, save to file, load input, or clear everything.
 

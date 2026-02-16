@@ -3,6 +3,8 @@
 import tkinter as tk
 from tkinter import ttk, scrolledtext, filedialog, messagebox
 import re
+import os
+import tempfile
 
 
 class RegexIsolatorApp:
@@ -26,10 +28,14 @@ class RegexIsolatorApp:
 
         self.update_timer = None
         self.match_positions = []
+        self.live_matching = tk.BooleanVar(value=True)
+        self.cached_input_path = None
+        self.cached_input_chars = 0
 
         self._build_ui()
         self._bind_events()
         self._check_paste_button()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ── UI construction ──────────────────────────────────────────────
 
@@ -62,6 +68,10 @@ class RegexIsolatorApp:
         ("Integer",        r"-?\d+"),
         ("Decimal Number", r"-?\d+\.\d+"),
     ]
+
+    _LARGE_TEXT_THRESHOLD = 300_000
+    _HIGHLIGHT_MAX_CHARS = 200_000
+    _OUTPUT_MAX_MATCHES = 5000
 
     def _build_regex_bar(self, parent):
         """Regex entry, replacement entry, presets dropdown, and flag checkboxes."""
@@ -140,6 +150,10 @@ class RegexIsolatorApp:
         ttk.Checkbutton(header, text="Unique", variable=self.unique_matches,
                         command=self._on_content_change).pack(side=tk.LEFT, padx=(10, 0))
 
+        ttk.Checkbutton(header, text="Live matching", variable=self.live_matching,
+                command=self._on_live_toggle).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(header, text="Match", command=self._run_match).pack(side=tk.LEFT, padx=(8, 0))
+
         # Output delimiter selector
         ttk.Label(header, text="Delim:").pack(side=tk.LEFT, padx=(10, 0))
         self.delimiter_var = tk.StringVar(value="Newline")
@@ -163,6 +177,8 @@ class RegexIsolatorApp:
             ("Save to File", self._save_to_file),
             ("Clear All", self._clear_all),
             ("Load from File", self._load_from_file),
+            ("Cache Input", self._cache_input),
+            ("Restore Cached", self._restore_cached_input),
         ]:
             ttk.Button(bar, text=label, command=cmd).pack(side=tk.LEFT, padx=(0, 5))
 
@@ -204,16 +220,42 @@ class RegexIsolatorApp:
 
     def _on_content_change(self, _event=None):
         """Debounce content changes - waits 300 ms of inactivity before processing."""
+        if not self.live_matching.get():
+            if self.update_timer:
+                self.root.after_cancel(self.update_timer)
+                self.update_timer = None
+            self.status_label.config(text="Live matching off — press Match", foreground="gray")
+            return
+
         if self.update_timer:
             self.root.after_cancel(self.update_timer)
         self.update_timer = self.root.after(300, self._process)
+
+    def _on_live_toggle(self):
+        """Switch between automatic debounced matching and manual matching."""
+        if self.live_matching.get():
+            self.status_label.config(text="Live matching on", foreground="green")
+            self._on_content_change()
+            return
+
+        if self.update_timer:
+            self.root.after_cancel(self.update_timer)
+            self.update_timer = None
+        self.status_label.config(text="Live matching off — press Match", foreground="gray")
+
+    def _run_match(self):
+        """Run matching immediately regardless of live-matching mode."""
+        if self.update_timer:
+            self.root.after_cancel(self.update_timer)
+            self.update_timer = None
+        self._process()
 
     # ── Core regex processing ────────────────────────────────────────
 
     def _process(self):
         """Run the regex against the input and update highlights + output."""
         pattern_str = self.regex_entry.get().strip()
-        text = self.input_text.get("1.0", tk.END).strip()
+        text, text_source = self._get_active_text()
 
         # Reset output
         self.output_text.config(state="normal")
@@ -248,27 +290,37 @@ class RegexIsolatorApp:
             self.status_label.config(text=f"Invalid regex: {exc}", foreground="red")
             return
 
-        # Highlight every match in the input pane
+        # Highlight every match in the input pane + build match strings in one pass
         self.match_positions.clear()
         self.input_text.tag_remove("highlight", "1.0", tk.END)
         self.input_text.tag_remove("selected_match", "1.0", tk.END)
 
-        for m in pattern.finditer(text):
-            self.match_positions.append((m.start(), m.end()))
-            self.input_text.tag_add("highlight",
-                                    f"1.0 + {m.start()} chars",
-                                    f"1.0 + {m.end()} chars")
-
-        # Build the output list (collapse capture-group tuples into strings)
-        raw_matches = pattern.findall(text)
         processed = []
-        for match in raw_matches:
-            if isinstance(match, tuple):
-                processed.append("".join(s for s in match if s))
-            else:
-                processed.append(str(match))
+        total_count = 0
+        group_count = pattern.groups
+        can_highlight = text_source == "input" and len(text) <= self._HIGHLIGHT_MAX_CHARS
+        output_limit_reached = False
 
-        total_count = len(processed)
+        for m in pattern.finditer(text):
+            total_count += 1
+
+            if can_highlight:
+                self.match_positions.append((m.start(), m.end()))
+                self.input_text.tag_add("highlight",
+                                        f"1.0 + {m.start()} chars",
+                                        f"1.0 + {m.end()} chars")
+
+            if group_count == 0:
+                value = m.group(0)
+            elif group_count == 1:
+                value = m.group(1) or ""
+            else:
+                value = "".join(g for g in m.groups() if g)
+
+            if len(processed) < self._OUTPUT_MAX_MATCHES:
+                processed.append(value)
+            else:
+                output_limit_reached = True
 
         # Optionally deduplicate while preserving order
         if self.unique_matches.get():
@@ -287,16 +339,30 @@ class RegexIsolatorApp:
         if processed:
             self.output_text.insert("1.0", delimiter.join(processed))
 
+            if output_limit_reached:
+                self.output_text.insert(
+                    tk.END,
+                    f"\n\n(Output capped at first {self._OUTPUT_MAX_MATCHES} matches)",
+                )
+
             # Clickable tags only make sense in newline mode
-            if delimiter == "\n":
+            if delimiter == "\n" and can_highlight:
                 for i in range(len(processed)):
                     tag = f"match_{i}"
                     self.output_text.tag_add(tag, f"{i + 1}.0", f"{i + 1}.end")
                     self.output_text.tag_config(tag, foreground="blue")
 
             unique_note = f", {len(processed)} unique" if self.unique_matches.get() else ""
+            source_note = " (cached input)" if text_source == "cache" else ""
             self.match_count_label.config(text=f"({total_count} matches{unique_note})")
-            self.status_label.config(text=f"Found {total_count} match(es)", foreground="green")
+            if can_highlight:
+                self.status_label.config(text=f"Found {total_count} match(es){source_note}",
+                                         foreground="green")
+            else:
+                self.status_label.config(
+                    text=f"Found {total_count} match(es){source_note} — highlighting disabled for large text",
+                    foreground="green",
+                )
         else:
             self.output_text.insert("1.0", "(No matches found)")
             self.status_label.config(text="No matches found", foreground="orange")
@@ -304,11 +370,11 @@ class RegexIsolatorApp:
         self.output_text.config(state="disabled")
 
         # Update replacement preview
-        self._update_replace_preview(pattern, text)
+        self._update_replace_preview(pattern, text, total_count)
 
     # ── Replacement preview ───────────────────────────────────────────
 
-    def _update_replace_preview(self, pattern, text):
+    def _update_replace_preview(self, pattern, text, match_count):
         """Update the inline replacement preview label."""
         repl = self.replace_entry.get()
         if not repl:
@@ -317,9 +383,17 @@ class RegexIsolatorApp:
             self._replace_result = ""
             return
 
+        if len(text) > self._LARGE_TEXT_THRESHOLD:
+            self.replace_preview_label.config(
+                text="Preview disabled for large input (use Copy Result to run replacement)",
+                foreground="#555555",
+            )
+            self.replace_copy_btn.grid_remove()
+            self._replace_result = ""
+            return
+
         try:
             result = pattern.sub(repl, text)
-            count = len(pattern.findall(text))
         except re.error as exc:
             self.replace_preview_label.config(text=f"Replacement error: {exc}",
                                              foreground="red")
@@ -333,9 +407,9 @@ class RegexIsolatorApp:
         preview = result.replace("\n", " ")
         if len(preview) > 80:
             preview = preview[:80] + "…"
-        noun = "replacement" if count == 1 else "replacements"
+        noun = "replacement" if match_count == 1 else "replacements"
         self.replace_preview_label.config(
-            text=f'Preview ({count} {noun}): "{preview}"',
+            text=f'Preview ({match_count} {noun}): "{preview}"',
             foreground="#555555",
         )
         self.replace_copy_btn.grid(row=2, column=4, sticky="w", padx=(5, 0), pady=(2, 0))
@@ -347,6 +421,37 @@ class RegexIsolatorApp:
             self.root.clipboard_append(self._replace_result)
             self.status_label.config(text="Replacement result copied to clipboard",
                                      foreground="green")
+            return
+
+        repl = self.replace_entry.get()
+        if not repl:
+            self.status_label.config(text="No replacement pattern set", foreground="orange")
+            return
+
+        pattern_str = self.regex_entry.get().strip()
+        text, _ = self._get_active_text()
+        if not pattern_str or not text:
+            self.status_label.config(text="Need pattern and input text", foreground="orange")
+            return
+
+        flags = 0
+        if self.ignore_case.get():
+            flags |= re.IGNORECASE
+        if self.multiline.get():
+            flags |= re.MULTILINE
+        if self.dotall.get():
+            flags |= re.DOTALL
+
+        try:
+            pattern = re.compile(pattern_str, flags)
+            result = pattern.sub(repl, text)
+        except re.error as exc:
+            self.status_label.config(text=f"Replacement error: {exc}", foreground="red")
+            return
+
+        self.root.clipboard_clear()
+        self.root.clipboard_append(result)
+        self.status_label.config(text="Replacement result copied to clipboard", foreground="green")
 
     # ── Click-to-jump ────────────────────────────────────────────────
 
@@ -387,6 +492,7 @@ class RegexIsolatorApp:
             return
 
         if content:
+            self._clear_cached_input_file()
             self.input_text.delete("1.0", tk.END)
             self.input_text.insert("1.0", content)
             self._check_paste_button()
@@ -437,6 +543,7 @@ class RegexIsolatorApp:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     content = f.read()
+                self._clear_cached_input_file()
                 self.input_text.delete("1.0", tk.END)
                 self.input_text.insert("1.0", content)
                 self.status_label.config(text=f"Loaded {path}", foreground="green")
@@ -444,6 +551,82 @@ class RegexIsolatorApp:
             except OSError as exc:
                 messagebox.showerror("Error", f"Failed to load file:\n{exc}")
                 self.status_label.config(text="Load failed", foreground="red")
+
+    def _cache_input(self):
+        """Move current input text into a temp file cache and unload textbox content."""
+        text = self.input_text.get("1.0", "end-1c")
+        if not text:
+            self.status_label.config(text="No input text to cache", foreground="orange")
+            return
+
+        self._clear_cached_input_file()
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", delete=False, suffix=".regex-isolator-cache.txt"
+            ) as tmp:
+                tmp.write(text)
+                self.cached_input_path = tmp.name
+        except OSError as exc:
+            self.status_label.config(text=f"Cache failed: {exc}", foreground="red")
+            return
+
+        self.cached_input_chars = len(text)
+        self.input_text.delete("1.0", tk.END)
+        self.input_text.tag_remove("highlight", "1.0", tk.END)
+        self.input_text.tag_remove("selected_match", "1.0", tk.END)
+        self.match_positions.clear()
+        self._check_paste_button()
+        self.live_matching.set(False)
+        self.status_label.config(
+            text=f"Input cached ({self.cached_input_chars:,} chars). Press Match to process.",
+            foreground="green",
+        )
+
+    def _restore_cached_input(self):
+        """Restore cached text back into the input textbox."""
+        if not self.cached_input_path:
+            self.status_label.config(text="No cached input to restore", foreground="orange")
+            return
+
+        try:
+            with open(self.cached_input_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except OSError as exc:
+            self.status_label.config(text=f"Restore failed: {exc}", foreground="red")
+            return
+
+        self.input_text.delete("1.0", tk.END)
+        self.input_text.insert("1.0", content)
+        self._clear_cached_input_file()
+        self._check_paste_button()
+        self.status_label.config(text="Restored cached input", foreground="green")
+        self._on_content_change()
+
+    def _get_active_text(self):
+        """Return active input text and source ('input' or 'cache')."""
+        text = self.input_text.get("1.0", "end-1c")
+        if text:
+            return text, "input"
+
+        if self.cached_input_path:
+            try:
+                with open(self.cached_input_path, "r", encoding="utf-8") as f:
+                    return f.read(), "cache"
+            except OSError:
+                self._clear_cached_input_file()
+
+        return "", "input"
+
+    def _clear_cached_input_file(self):
+        """Delete and forget the current cache file if it exists."""
+        if self.cached_input_path:
+            try:
+                os.remove(self.cached_input_path)
+            except OSError:
+                pass
+        self.cached_input_path = None
+        self.cached_input_chars = 0
 
     # ── Help window ──────────────────────────────────────────────────
 
@@ -553,7 +736,13 @@ class RegexIsolatorApp:
         self.replace_preview_label.config(text="")
         self.replace_copy_btn.grid_remove()
         self._replace_result = ""
+        self._clear_cached_input_file()
         self.status_label.config(text="Cleared", foreground="green")
+
+    def _on_close(self):
+        """Clean up temporary cache files before exiting."""
+        self._clear_cached_input_file()
+        self.root.destroy()
 
 
 def main():
