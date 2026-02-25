@@ -5,6 +5,7 @@ from tkinter import ttk, scrolledtext, filedialog, messagebox
 import re
 import os
 import tempfile
+import json
 
 
 class RegexIsolatorApp:
@@ -31,8 +32,11 @@ class RegexIsolatorApp:
         self.live_matching = tk.BooleanVar(value=True)
         self.cached_input_path = None
         self.cached_input_chars = 0
+        self.custom_presets = {}
 
         self._build_ui()
+        self._load_custom_presets()
+        self._refresh_preset_values()
         self._bind_events()
         self._check_paste_button()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -81,6 +85,9 @@ class RegexIsolatorApp:
     _LARGE_TEXT_THRESHOLD = 300_000
     _HIGHLIGHT_MAX_CHARS = 200_000
     _OUTPUT_MAX_MATCHES = 5000
+    _PRESET_PLACEHOLDER = "— Presets —"
+    _CUSTOM_SECTION_LABEL = "— Custom Presets —"
+    _PRESET_FILE = ".regex_isolator_presets.json"
 
     def _build_regex_bar(self, parent):
         """Regex entry, replacement entry, presets dropdown, and flag checkboxes."""
@@ -110,17 +117,28 @@ class RegexIsolatorApp:
         self.replace_entry.grid(row=1, column=1, sticky="ew", padx=(0, 10), pady=(5, 0))
         self.replace_entry.bind("<KeyRelease>", self._on_content_change)
 
-        self.preset_var = tk.StringVar(value=self._PRESETS[0][0])
-        preset_combo = ttk.Combobox(frame, textvariable=self.preset_var,
-                                    values=[p[0] for p in self._PRESETS],
-                                    state="readonly", width=20)
-        preset_combo.grid(row=1, column=2, columnspan=3, sticky="w", padx=5, pady=(5, 0))
-        preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
+        self.preset_var = tk.StringVar(value=self._PRESET_PLACEHOLDER)
+        self.preset_combo = ttk.Combobox(frame, textvariable=self.preset_var,
+                                         values=[self._PRESET_PLACEHOLDER],
+                                         state="readonly", width=20)
+        self.preset_combo.grid(row=1, column=2, sticky="w", padx=5, pady=(5, 0))
+        self.preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
 
-        # Row 2 — inline replacement preview + copy button
+        ttk.Label(frame, text="Preset Name:").grid(row=1, column=3, sticky="e", padx=(5, 5), pady=(5, 0))
+        self.preset_name_entry = ttk.Entry(frame, width=18)
+        self.preset_name_entry.grid(row=1, column=4, sticky="w", pady=(5, 0))
+
+        ttk.Button(frame, text="Save Preset", command=self._save_named_preset).grid(
+            row=2, column=2, sticky="w", padx=5, pady=(4, 0)
+        )
+        ttk.Button(frame, text="Delete Preset", command=self._delete_named_preset).grid(
+            row=2, column=3, sticky="w", padx=5, pady=(4, 0)
+        )
+
+        # Row 3 — inline replacement preview + copy button
         self.replace_preview_label = ttk.Label(frame, text="", foreground="#555555",
                                                font=("Segoe UI", 9))
-        self.replace_preview_label.grid(row=2, column=0, columnspan=4, sticky="w",
+        self.replace_preview_label.grid(row=3, column=0, columnspan=4, sticky="w",
                                         padx=(0, 5), pady=(2, 0))
         self.replace_copy_btn = ttk.Button(frame, text="Copy Result",
                                            command=self._copy_replace_result)
@@ -198,14 +216,151 @@ class RegexIsolatorApp:
     def _on_preset_selected(self, _event=None):
         """Populate the regex entry from the chosen preset."""
         name = self.preset_var.get()
+        if name in (self._PRESET_PLACEHOLDER, self._CUSTOM_SECTION_LABEL):
+            return
+
+        if name in self.custom_presets:
+            self._apply_custom_preset(name)
+            self.preset_name_entry.delete(0, tk.END)
+            self.preset_name_entry.insert(0, name)
+            self.status_label.config(text=f"Loaded preset '{name}'", foreground="green")
+            return
+
         for label, pattern in self._PRESETS:
             if label == name and pattern:
                 self.regex_entry.delete(0, tk.END)
                 self.regex_entry.insert(0, pattern)
                 self._on_content_change()
+                self.status_label.config(text=f"Loaded built-in preset '{name}'", foreground="green")
                 break
-        # Reset combo display text so the same preset can be re-selected
-        self.preset_var.set(self._PRESETS[0][0])
+
+    def _get_preset_file_path(self):
+        """Return on-disk path used for custom preset storage."""
+        return os.path.join(os.path.expanduser("~"), self._PRESET_FILE)
+
+    def _load_custom_presets(self):
+        """Load custom presets from disk if available."""
+        path = self._get_preset_file_path()
+        try:
+            if not os.path.exists(path):
+                self.custom_presets = {}
+                return
+            with open(path, "r", encoding="utf-8") as file_obj:
+                raw = json.load(file_obj)
+            if isinstance(raw, dict):
+                self.custom_presets = {
+                    str(name): value
+                    for name, value in raw.items()
+                    if isinstance(name, str) and isinstance(value, dict)
+                }
+            else:
+                self.custom_presets = {}
+        except (OSError, json.JSONDecodeError):
+            self.custom_presets = {}
+
+    def _save_custom_presets(self):
+        """Persist custom presets to disk."""
+        path = self._get_preset_file_path()
+        with open(path, "w", encoding="utf-8") as file_obj:
+            json.dump(self.custom_presets, file_obj, indent=2)
+
+    def _refresh_preset_values(self):
+        """Refresh preset combobox values with built-ins and custom names."""
+        values = [self._PRESET_PLACEHOLDER]
+        values.extend([name for name, pattern in self._PRESETS if pattern])
+        custom_names = sorted(self.custom_presets.keys(), key=str.lower)
+        if custom_names:
+            values.append(self._CUSTOM_SECTION_LABEL)
+            values.extend(custom_names)
+        self.preset_combo["values"] = values
+        if self.preset_var.get() not in values:
+            self.preset_var.set(self._PRESET_PLACEHOLDER)
+
+    def _current_preset_payload(self):
+        """Capture current settings into a serializable preset payload."""
+        return {
+            "pattern": self.regex_entry.get(),
+            "replace": self.replace_entry.get(),
+            "ignore_case": self.ignore_case.get(),
+            "multiline": self.multiline.get(),
+            "dotall": self.dotall.get(),
+            "unique": self.unique_matches.get(),
+            "delimiter": self.delimiter_var.get(),
+            "live_matching": self.live_matching.get(),
+        }
+
+    def _apply_custom_preset(self, name):
+        """Apply a saved custom preset by name."""
+        payload = self.custom_presets.get(name, {})
+        self.regex_entry.delete(0, tk.END)
+        self.regex_entry.insert(0, payload.get("pattern", ""))
+
+        self.replace_entry.delete(0, tk.END)
+        self.replace_entry.insert(0, payload.get("replace", ""))
+
+        self.ignore_case.set(bool(payload.get("ignore_case", False)))
+        self.multiline.set(bool(payload.get("multiline", False)))
+        self.dotall.set(bool(payload.get("dotall", False)))
+        self.unique_matches.set(bool(payload.get("unique", False)))
+        self.delimiter_var.set(payload.get("delimiter", "Newline"))
+        self.live_matching.set(bool(payload.get("live_matching", True)))
+        self._on_live_toggle()
+        self._on_content_change()
+
+    def _save_named_preset(self):
+        """Save current settings under the provided custom preset name."""
+        name = self.preset_name_entry.get().strip()
+        if not name:
+            self.status_label.config(text="Enter a preset name to save", foreground="orange")
+            return
+
+        builtin_names = {label for label, pattern in self._PRESETS if pattern}
+        if name in builtin_names:
+            self.status_label.config(text="Preset name conflicts with a built-in preset", foreground="red")
+            return
+        if name in (self._PRESET_PLACEHOLDER, self._CUSTOM_SECTION_LABEL):
+            self.status_label.config(text="Choose a different preset name", foreground="red")
+            return
+
+        self.custom_presets[name] = self._current_preset_payload()
+        try:
+            self._save_custom_presets()
+        except OSError as exc:
+            messagebox.showerror("Error", f"Failed to save preset:\n{exc}")
+            self.status_label.config(text="Preset save failed", foreground="red")
+            return
+
+        self._refresh_preset_values()
+        self.preset_var.set(name)
+        self.status_label.config(text=f"Saved preset '{name}'", foreground="green")
+
+    def _delete_named_preset(self):
+        """Delete a custom preset by name."""
+        typed_name = self.preset_name_entry.get().strip()
+        selected_name = self.preset_var.get()
+        name = typed_name or (selected_name if selected_name in self.custom_presets else "")
+
+        if not name:
+            self.status_label.config(text="Enter or select a custom preset to delete", foreground="orange")
+            return
+        if name not in self.custom_presets:
+            self.status_label.config(text=f"No custom preset named '{name}'", foreground="orange")
+            return
+
+        if not messagebox.askyesno("Delete Preset", f"Delete preset '{name}'?"):
+            return
+
+        del self.custom_presets[name]
+        try:
+            self._save_custom_presets()
+        except OSError as exc:
+            messagebox.showerror("Error", f"Failed to delete preset:\n{exc}")
+            self.status_label.config(text="Preset delete failed", foreground="red")
+            return
+
+        self._refresh_preset_values()
+        self.preset_name_entry.delete(0, tk.END)
+        self.status_label.config(text=f"Deleted preset '{name}'", foreground="green")
 
     def _bind_events(self):
         """Wire up keyboard and mouse events."""
@@ -421,7 +576,7 @@ class RegexIsolatorApp:
             text=f'Preview ({match_count} {noun}): "{preview}"',
             foreground="#555555",
         )
-        self.replace_copy_btn.grid(row=2, column=4, sticky="w", padx=(5, 0), pady=(2, 0))
+        self.replace_copy_btn.grid(row=3, column=4, sticky="w", padx=(5, 0), pady=(2, 0))
 
     def _copy_replace_result(self):
         """Copy the full replacement result to the clipboard."""
@@ -742,6 +897,8 @@ class RegexIsolatorApp:
         self.match_count_label.config(text="")
         self.unique_matches.set(False)
         self.delimiter_var.set("Newline")
+        self.preset_var.set(self._PRESET_PLACEHOLDER)
+        self.preset_name_entry.delete(0, tk.END)
         self.replace_preview_label.config(text="")
         self.replace_copy_btn.grid_remove()
         self._replace_result = ""

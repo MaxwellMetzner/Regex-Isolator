@@ -11,6 +11,7 @@ A lightweight desktop tool for testing regular expressions and extracting matche
 - **Match highlighting** — matched regions are highlighted yellow in the input pane
 - **Click-to-jump** — click any output line to scroll to that match in the input
 - **Regex flags** — toggle Ignore Case, Multiline, and Dot All
+- **Named presets** — load built-in regex presets and save/load/delete your own custom named presets
 - **Clipboard support** — paste input / copy output via tkinter's native clipboard
 - **File I/O** — load input from a file or save matches to a file
 - **Zero dependencies** — only uses `tkinter` and `re` from the standard library
@@ -29,6 +30,7 @@ python main.py
 ```
 
 1. Enter a regex pattern in the top bar.
+2. Optionally type a preset name and click **Save Preset** to store current settings.
 2. Paste or type text into the left pane (or click **📋 Paste from Clipboard**).
 3. With **Live matching** enabled, matches update as you type; for very large text, disable it and click **Match**.
 4. For extremely large text, click **Cache Input** to unload the textbox, then run matches with **Match**.
