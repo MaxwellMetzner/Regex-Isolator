@@ -1,20 +1,20 @@
 # Regex Isolator
 
-A lightweight desktop tool for testing regular expressions and extracting matches from text — built with Python's standard library only.
+A lightweight desktop tool for testing regular expressions and extracting matches from text - built with Python's standard library only.
 
 ![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue)
 
 ## Features
 
-- **Live/manual matching** — keep live updates on (300 ms debounce) or turn them off and press **Match** manually for large inputs
-- **Cache & unload mode** — move huge input into a temp cache file so the textbox stays light; restore it later when needed
-- **Match highlighting** — matched regions are highlighted yellow in the input pane
-- **Click-to-jump** — click any output line to scroll to that match in the input
-- **Regex flags** — toggle Ignore Case, Multiline, and Dot All
-- **Named presets** — load built-in regex presets and save/load/delete your own custom named presets
-- **Clipboard support** — paste input / copy output via tkinter's native clipboard
-- **File I/O** — load input from a file or save matches to a file
-- **Zero dependencies** — only uses `tkinter` and `re` from the standard library
+- **Live/manual matching** - keep live updates on (300 ms debounce) or turn them off and press **Match** manually for large inputs
+- **Cache & unload mode** - move huge input into a temp cache file so the textbox stays light; restore it later when needed
+- **Match highlighting** - matched regions are highlighted yellow in the input pane
+- **Click-to-jump** - click any output line to scroll to that match in the input
+- **Regex flags** - toggle Ignore Case, Multiline, and Dot All
+- **Named presets** - load built-in regex presets and save/load/delete your own custom named presets
+- **Clipboard support** - paste input / copy output via tkinter's native clipboard
+- **File I/O** - load input from a file or save matches to a file
+- **Zero dependencies** - only uses `tkinter` and `re` from the standard library
 
 ## Requirements
 
