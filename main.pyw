@@ -28,6 +28,12 @@ class RegexIsolatorApp:
         self.live_matching = tk.BooleanVar(value=True)
         self.cached_input_path = None
         self.cached_input_chars = 0
+        self.file_source_path = None
+        self.file_source_size = 0
+        self.file_scan_context = None
+        self.scan_in_progress = False
+        self.scan_generation = 0
+        self.result_records = []
         self.custom_presets = {}
 
         self._configure_window()
@@ -37,6 +43,7 @@ class RegexIsolatorApp:
         self._bind_events()
         self._check_paste_button()
         self._sync_live_mode_badge()
+        self._update_pattern_coach()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # Common regex presets: (display name, pattern)
@@ -65,6 +72,10 @@ class RegexIsolatorApp:
     _LARGE_TEXT_THRESHOLD = 300_000
     _HIGHLIGHT_MAX_CHARS = 200_000
     _OUTPUT_MAX_MATCHES = 5000
+    _EDITOR_LOAD_MAX_BYTES = 16 * 1024 * 1024
+    _FILE_SCAN_BATCH_LINES = 1500
+    _LIVE_TEXT_MAX_CHARS = 500_000
+    _PREVIEW_MAX_CHARS = 180
     _PRESET_PLACEHOLDER = "— Presets —"
     _CUSTOM_SECTION_LABEL = "— Custom Presets —"
     _PRESET_FILE = ".regex_isolator_presets.json"
@@ -287,6 +298,172 @@ class RegexIsolatorApp:
         background, foreground = tones.get(tone, tones["neutral"])
         self.match_count_label.config(text=text, bg=background, fg=foreground)
 
+    def _set_long_operation_active(self, active):
+        """Show or hide cancellation affordances for incremental file work."""
+        if not hasattr(self, "cancel_scan_btn"):
+            return
+
+        if active:
+            self.cancel_scan_btn.grid()
+        else:
+            self.cancel_scan_btn.grid_remove()
+
+    def _current_pattern_text(self):
+        """Return the pattern exactly as typed so whitespace regexes are valid."""
+        return self.regex_entry.get()
+
+    def _delimiter_text(self):
+        """Return the configured output delimiter as concrete text."""
+        delim_map = {"Newline": "\n", "Comma": ", ", "Tab": "\t", "Space": " "}
+        return delim_map.get(self.delimiter_var.get(), "\n")
+
+    def _format_flag_summary(self):
+        """Return a compact label for the active regex flags."""
+        active = []
+        if self.ignore_case.get():
+            active.append("Ignore Case")
+        if self.multiline.get():
+            active.append("Multiline")
+        if self.dotall.get():
+            active.append("Dot All")
+        return ", ".join(active) if active else "no flags"
+
+    def _line_mode_dotall_requested(self, pattern_text):
+        """Return True when checkbox or inline syntax asks dot to match newlines."""
+        return self.dotall.get() or re.search(r"\(\?[a-zA-Z-]*s", pattern_text) is not None
+
+    def _find_literal_prefix(self, pattern_text):
+        """Best-effort prefix hint for the performance coach."""
+        text = pattern_text
+        if text.startswith("^"):
+            text = text[1:]
+
+        prefix = []
+        escaped = False
+        for char in text:
+            if escaped:
+                if char in "AbBdDsSwWZ0123456789":
+                    break
+                prefix.append(char)
+                escaped = False
+                continue
+
+            if char == "\\":
+                escaped = True
+                continue
+            if char.isalnum() or char in " _-:/@.":
+                prefix.append(char)
+                continue
+            break
+
+        return "".join(prefix).strip()
+
+    def _analyze_pattern(self, pattern_text):
+        """Return static performance and correctness hints for a pattern."""
+        if not pattern_text:
+            return ["Enter a pattern to get performance and syntax guidance."], "neutral"
+
+        hints = []
+        tone = "success"
+
+        if pattern_text.startswith(".*") or pattern_text.startswith("^.*"):
+            hints.append("Leading dot-star makes the engine try broad spans before it can prove a match. Anchor to a literal prefix when possible.")
+            tone = "warning"
+        if re.search(r"\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)\s*(?:[+*]|\{)", pattern_text):
+            hints.append("Nested unbounded quantifiers can cause catastrophic backtracking on Python's regex engine.")
+            tone = "error"
+        if re.search(r"\.\*.*\.\*", pattern_text) or re.search(r"\.\+.*\.\+", pattern_text):
+            hints.append("Multiple wildcard repeats in one pattern are expensive on large lines; replace them with narrower character classes.")
+            if tone != "error":
+                tone = "warning"
+        if re.search(r"\\[1-9]", pattern_text) or "\\g<" in pattern_text:
+            hints.append("Backreferences are powerful but can be slow at gigabyte scale; use them only when equality between groups is required.")
+            if tone != "error":
+                tone = "warning"
+        if any(token in pattern_text for token in ("(?=", "(?!", "(?<=", "(?<!")):
+            hints.append("Lookaround keeps output precise, but it can be slower than a consuming expression on huge files.")
+            if tone != "error":
+                tone = "warning"
+        if "[\\s\\S]" in pattern_text and self.dotall.get():
+            hints.append("Dot All is enabled, so [\\s\\S] can usually be simplified to a dot.")
+        if self.file_source_path and self._line_mode_dotall_requested(pattern_text):
+            hints.append("Dot All is disabled for file-backed scans because the gigabyte-safe path scans one line at a time.")
+            tone = "error"
+        if pattern_text.count("|") >= 8:
+            hints.append("Large alternation lists are faster when the most common or most selective alternatives appear first.")
+            if tone != "error":
+                tone = "warning"
+
+        literal_prefix = self._find_literal_prefix(pattern_text)
+        if literal_prefix:
+            hints.append(f"Literal prefix '{literal_prefix[:32]}' gives the engine a useful starting point.")
+
+        if not hints:
+            hints.append("Looks line-scan friendly. Prefer literal prefixes, bounded repeats, and non-capturing groups when captures are not needed.")
+
+        return hints, tone
+
+    def _update_pattern_coach(self):
+        """Refresh the inline pattern preview and performance coach labels."""
+        if not hasattr(self, "pattern_preview_label"):
+            return
+
+        pattern_text = self._current_pattern_text()
+        if not pattern_text:
+            self.pattern_preview_label.config(
+                text="Pattern preview: waiting for a regex.",
+                foreground=self._PALETTE["muted"],
+            )
+            self.pattern_coach_label.config(
+                text="Performance coach: enter a pattern to get optimization hints.",
+                foreground=self._PALETTE["muted"],
+            )
+            return
+
+        try:
+            compiled = re.compile(pattern_text, self._get_regex_flags())
+        except re.error as exc:
+            self.pattern_preview_label.config(
+                text=f"Pattern preview: invalid regex ({exc}).",
+                foreground=self._PALETTE["error"],
+            )
+            self.pattern_coach_label.config(
+                text="Performance coach: fix the syntax error before tuning the pattern.",
+                foreground=self._PALETTE["error"],
+            )
+            return
+
+        named_groups = ", ".join(list(compiled.groupindex.keys())[:4])
+        group_note = f"{compiled.groups} capture group{'s' if compiled.groups != 1 else ''}"
+        if named_groups:
+            group_note = f"{group_note}; named: {named_groups}"
+
+        self.pattern_preview_label.config(
+            text=f"Pattern preview: {group_note}; {self._format_flag_summary()}.",
+            foreground=self._PALETTE["muted"],
+        )
+        hints, tone = self._analyze_pattern(pattern_text)
+        colors = {
+            "neutral": self._PALETTE["muted"],
+            "success": self._PALETTE["success"],
+            "warning": self._PALETTE["warning"],
+            "error": self._PALETTE["error"],
+        }
+        self.pattern_coach_label.config(
+            text="Performance coach: " + " ".join(hints[:2]),
+            foreground=colors.get(tone, self._PALETTE["muted"]),
+        )
+
+    def _format_file_size(self, size_bytes):
+        """Return a compact human-readable file size label."""
+        size = float(size_bytes)
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if size < 1024 or unit == "TB":
+                if unit == "B":
+                    return f"{int(size)} {unit}"
+                return f"{size:.1f} {unit}"
+            size /= 1024
+
     def _refresh_input_overview(self):
         """Refresh small UI summaries describing where the source text lives."""
         text = self.input_text.get("1.0", "end-1c")
@@ -296,6 +473,10 @@ class RegexIsolatorApp:
         elif self.cached_input_path:
             summary = f"Input cached off-screen • {self.cached_input_chars:,} characters"
             source = "Source: cache"
+        elif self.file_source_path:
+            filename = os.path.basename(self.file_source_path)
+            summary = f"File-backed source • {filename} • {self._format_file_size(self.file_source_size)}"
+            source = "Source: direct file scan"
         else:
             summary = "Paste, type, or load text to start testing"
             source = "Source: empty"
@@ -357,8 +538,11 @@ class RegexIsolatorApp:
             pady=7,
         )
         self.mode_badge_label.grid(row=0, column=0, padx=(0, 14))
-        ttk.Button(controls, text="Help", style="HeroSecondary.TButton", command=self._show_help).grid(row=0, column=1, padx=(0, 8))
-        ttk.Button(controls, text="Clear All", style="HeroPrimary.TButton", command=self._clear_all).grid(row=0, column=2)
+        self.cancel_scan_btn = ttk.Button(controls, text="Cancel Job", style="HeroSecondary.TButton", command=self._cancel_active_operation)
+        self.cancel_scan_btn.grid(row=0, column=1, padx=(0, 8))
+        self.cancel_scan_btn.grid_remove()
+        ttk.Button(controls, text="Help", style="HeroSecondary.TButton", command=self._show_help).grid(row=0, column=2, padx=(0, 8))
+        ttk.Button(controls, text="Clear All", style="HeroPrimary.TButton", command=self._clear_all).grid(row=0, column=3)
 
     def _build_regex_bar(self, parent):
         """Compact control card for pattern editing, presets, and matching options."""
@@ -394,6 +578,11 @@ class RegexIsolatorApp:
         self.replace_copy_btn.grid(row=4, column=1, sticky="e", padx=(12, 0), pady=(10, 0))
         self.replace_copy_btn.grid_remove()
         self._replace_result = ""
+
+        self.pattern_preview_label = ttk.Label(editor_col, text="", style="Caption.TLabel", justify="left", wraplength=560)
+        self.pattern_preview_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.pattern_coach_label = ttk.Label(editor_col, text="", style="Caption.TLabel", justify="left", wraplength=560)
+        self.pattern_coach_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         preset_col = ttk.Frame(frame, style="SoftCard.TFrame", padding=(16, 16))
         preset_col.grid(row=2, column=1, sticky="nsew")
@@ -527,13 +716,17 @@ class RegexIsolatorApp:
         actions = ttk.Frame(header, style="Card.TFrame")
         actions.grid(row=0, column=1, sticky="e")
         ttk.Button(actions, text="Copy", style="Secondary.TButton", command=self._copy_to_clipboard).grid(row=0, column=0, padx=(0, 8))
-        ttk.Button(actions, text="Save", style="Secondary.TButton", command=self._save_to_file).grid(row=0, column=1)
+        ttk.Button(actions, text="Save", style="Secondary.TButton", command=self._save_to_file).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(actions, text="Export JSONL", style="Secondary.TButton", command=self._export_results_jsonl).grid(row=0, column=2)
 
         tools = ttk.Frame(parent, style="Card.TFrame")
         tools.grid(row=1, column=0, sticky="ew", pady=(14, 12))
 
+        filter_row = ttk.Frame(tools, style="Card.TFrame")
+        filter_row.pack(fill=tk.X)
+
         self.match_count_label = tk.Label(
-            tools,
+            filter_row,
             text="0 matches",
             bg=self._PALETTE["surface_alt"],
             fg=self._PALETTE["muted"],
@@ -544,12 +737,19 @@ class RegexIsolatorApp:
         self.match_count_label.pack(side=tk.LEFT)
 
         self.unique_matches = tk.BooleanVar()
-        ttk.Checkbutton(tools, text="Unique only", variable=self.unique_matches, style="Card.TCheckbutton", command=self._on_content_change).pack(side=tk.LEFT, padx=(16, 14))
-        ttk.Label(tools, text="Delimiter", style="FieldLabel.TLabel").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Checkbutton(filter_row, text="Unique only", variable=self.unique_matches, style="Card.TCheckbutton", command=self._on_content_change).pack(side=tk.LEFT, padx=(16, 14))
+        ttk.Label(filter_row, text="Delimiter", style="FieldLabel.TLabel").pack(side=tk.LEFT, padx=(0, 8))
         self.delimiter_var = tk.StringVar(value="Newline")
-        delim_combo = ttk.Combobox(tools, textvariable=self.delimiter_var, values=["Newline", "Comma", "Tab", "Space"], state="readonly", width=10)
+        delim_combo = ttk.Combobox(filter_row, textvariable=self.delimiter_var, values=["Newline", "Comma", "Tab", "Space"], state="readonly", width=10)
         delim_combo.pack(side=tk.LEFT)
         delim_combo.bind("<<ComboboxSelected>>", self._on_content_change)
+
+        action_row = ttk.Frame(tools, style="Card.TFrame")
+        action_row.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(action_row, text="Keep Matches", style="Secondary.TButton", command=self._keep_only_matches_in_source).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(action_row, text="Delete Matches", style="Secondary.TButton", command=self._delete_matches_from_source).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(action_row, text="Save Matches", style="Secondary.TButton", command=self._save_all_matches_to_file).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(action_row, text="Save Cleaned", style="Secondary.TButton", command=self._save_text_without_matches).pack(side=tk.LEFT)
 
         editor_shell = ttk.Frame(parent, style="Card.TFrame")
         editor_shell.grid(row=2, column=0, sticky="nsew")
@@ -743,7 +943,7 @@ class RegexIsolatorApp:
         self.output_text.bind("<Button-1>", self._on_output_click)
 
     def _check_paste_button(self, _event=None):
-        """Show a centered empty state when the source editor is empty or cached."""
+        """Show a centered empty state when the source editor is empty or off-screen."""
         text = self.input_text.get("1.0", "end-1c").strip()
         if text:
             self.input_empty_state.place_forget()
@@ -767,6 +967,25 @@ class RegexIsolatorApp:
                 text="Match Now",
                 style="Accent.TButton",
                 command=self._run_match,
+            )
+        elif self.file_source_path:
+            filename = os.path.basename(self.file_source_path)
+            self.input_empty_title_label.config(text="Large file ready")
+            self.input_empty_body_label.config(
+                text=(
+                    f"{filename} stays on disk in file-backed mode ({self._format_file_size(self.file_source_size)}). "
+                    "Press Match Now to scan it line by line without loading the full file into the editor."
+                )
+            )
+            self.empty_state_primary_btn.config(
+                text="Match Now",
+                style="Accent.TButton",
+                command=self._run_match,
+            )
+            self.empty_state_secondary_btn.config(
+                text="Load Another File",
+                style="Secondary.TButton",
+                command=self._load_from_file,
             )
         else:
             self.input_empty_title_label.config(text="Bring in some source text")
@@ -797,14 +1016,31 @@ class RegexIsolatorApp:
 
     def _on_content_change(self, _event=None):
         """Debounce content changes - waits 300 ms of inactivity before processing."""
+        self._update_pattern_coach()
         self.output_click_enabled = False
         self.output_text.config(cursor="arrow")
+
+        if self.scan_in_progress:
+            self._set_status("An active file job is running. Cancel it before changing scan settings.", "warning")
+            return
 
         if not self.live_matching.get():
             if self.update_timer:
                 self.root.after_cancel(self.update_timer)
                 self.update_timer = None
-            self._set_status("Live matching off. Press Match Now to refresh results.", "neutral")
+            if not self.scan_in_progress:
+                self._set_status("Live matching off. Press Match Now to refresh results.", "neutral")
+            return
+
+        editor_chars = len(self.input_text.get("1.0", "end-1c"))
+        if editor_chars > self._LIVE_TEXT_MAX_CHARS:
+            if self.update_timer:
+                self.root.after_cancel(self.update_timer)
+                self.update_timer = None
+            self._set_status(
+                f"Live matching paused for {editor_chars:,} editor characters. Press Match Now when ready.",
+                "warning",
+            )
             return
 
         if self.update_timer:
@@ -813,7 +1049,17 @@ class RegexIsolatorApp:
 
     def _on_live_toggle(self):
         """Switch between automatic debounced matching and manual matching."""
+        if self.file_source_path and self.live_matching.get():
+            self.live_matching.set(False)
+            self._sync_live_mode_badge()
+            self._set_status(
+                "File-backed scans stay manual so large files are not re-scanned on every keystroke.",
+                "warning",
+            )
+            return
+
         self._sync_live_mode_badge()
+        self._update_pattern_coach()
         if self.live_matching.get():
             self._set_status("Live matching on", "success")
             self._on_content_change()
@@ -826,6 +1072,9 @@ class RegexIsolatorApp:
 
     def _run_match(self):
         """Run matching immediately regardless of live-matching mode."""
+        if self.scan_in_progress and self.file_scan_context and self.file_scan_context.get("operation") != "scan":
+            self._set_status("Wait for the active file save job to finish, or cancel it first.", "warning")
+            return
         if self.update_timer:
             self.root.after_cancel(self.update_timer)
             self.update_timer = None
@@ -833,17 +1082,14 @@ class RegexIsolatorApp:
 
     # ── Core regex processing ────────────────────────────────────────
 
-    def _process(self):
-        """Run the regex against the input and update highlights + output."""
-        pattern_str = self.regex_entry.get().strip()
-        text, text_source = self._get_active_text()
-
-        # Reset output state
+    def _reset_output_state(self):
+        """Clear result widgets before a new scan starts."""
         self.output_click_enabled = False
         self.match_positions.clear()
+        self.result_records = []
         self.output_text.config(state="normal")
         self.output_text.delete("1.0", tk.END)
-        self.output_text.config(cursor="arrow")
+        self.output_text.config(state="disabled", cursor="arrow")
         self._set_match_badge("0 matches", tone="neutral")
         self.output_meta_label.config(
             text="Run a pattern to isolate results. In newline mode, clicking a line jumps back to the source span."
@@ -853,20 +1099,8 @@ class RegexIsolatorApp:
         self.replace_copy_btn.grid_remove()
         self._replace_result = ""
 
-        if not pattern_str:
-            self.input_text.tag_remove("highlight", "1.0", tk.END)
-            self._set_status("Enter a regex pattern to begin", "neutral")
-            self.output_meta_label.config(text="Start with a pattern to wake up the result pane.")
-            self.output_text.config(state="disabled")
-            return
-
-        if not text:
-            self._set_status("Paste or load text to search", "neutral")
-            self.output_meta_label.config(text="The result pane fills once source text is available.")
-            self.output_text.config(state="disabled")
-            return
-
-        # Combine selected flags
+    def _get_regex_flags(self):
+        """Combine the checkbox state into Python regex flags."""
         flags = 0
         if self.ignore_case.get():
             flags |= re.IGNORECASE
@@ -874,66 +1108,69 @@ class RegexIsolatorApp:
             flags |= re.MULTILINE
         if self.dotall.get():
             flags |= re.DOTALL
+        return flags
 
-        try:
-            pattern = re.compile(pattern_str, flags)
-        except re.error as exc:
-            self.input_text.tag_remove("highlight", "1.0", tk.END)
-            self.output_text.config(state="disabled")
-            self._set_match_badge("Invalid pattern", tone="error")
-            self.output_meta_label.config(text="Fix the pattern to see fresh results.")
-            self._set_status(f"Invalid regex: {exc}", "error")
-            return
+    def _extract_match_value(self, match, group_count):
+        """Return the displayed value and all capture-group values for *match*."""
+        captures = list(match.groups())
+        if group_count == 0:
+            value = match.group(0)
+        elif group_count == 1:
+            value = match.group(1) or ""
+        else:
+            value = "".join(group for group in captures if group)
+        return value, captures
 
-        # Highlight every match in the input pane and capture the displayed results.
-        self.input_text.tag_remove("highlight", "1.0", tk.END)
-        self.input_text.tag_remove("selected_match", "1.0", tk.END)
+    def _build_editor_result_record(self, match, value, captures, text_source):
+        """Build a structured export record for editor/cache matches."""
+        return {
+            "match": value,
+            "full_match": match.group(0),
+            "captures": captures,
+            "start": match.start(),
+            "end": match.end(),
+            "source": text_source,
+        }
 
-        display_items = []
-        total_count = 0
-        group_count = pattern.groups
-        can_highlight = text_source == "input" and len(text) <= self._HIGHLIGHT_MAX_CHARS
-        output_limit_reached = False
+    def _format_line_preview(self, line):
+        """Return a single-line preview snippet for structured exports."""
+        preview = line.rstrip("\r\n").replace("\t", "    ")
+        if len(preview) > self._PREVIEW_MAX_CHARS:
+            preview = preview[: self._PREVIEW_MAX_CHARS - 3] + "..."
+        return preview
 
-        for match in pattern.finditer(text):
-            total_count += 1
+    def _build_file_result_record(self, match, value, captures, line_number, line_text):
+        """Build a structured export record for file-backed line scans."""
+        return {
+            "match": value,
+            "full_match": match.group(0),
+            "captures": captures,
+            "file_path": self.file_source_path,
+            "line": line_number,
+            "column_start": match.start() + 1,
+            "column_end": match.end(),
+            "preview": self._format_line_preview(line_text),
+            "source": "file",
+        }
 
-            if can_highlight:
-                self.input_text.tag_add(
-                    "highlight",
-                    f"1.0 + {match.start()} chars",
-                    f"1.0 + {match.end()} chars",
-                )
+    def _render_results(
+        self,
+        processed,
+        total_count,
+        *,
+        detail,
+        no_match_detail,
+        status_text,
+        can_click=False,
+        match_positions=None,
+        output_limit_reached=False,
+    ):
+        """Render processed matches into the output pane."""
+        delimiter = self._delimiter_text()
+        positions = list(match_positions or [])
 
-            if group_count == 0:
-                value = match.group(0)
-            elif group_count == 1:
-                value = match.group(1) or ""
-            else:
-                value = "".join(group for group in match.groups() if group)
-
-            if len(display_items) < self._OUTPUT_MAX_MATCHES:
-                display_items.append((value, (match.start(), match.end())))
-            else:
-                output_limit_reached = True
-
-        # Optionally deduplicate while preserving order
-        if self.unique_matches.get():
-            seen = set()
-            unique_items = []
-            for value, position in display_items:
-                if value not in seen:
-                    seen.add(value)
-                    unique_items.append((value, position))
-            display_items = unique_items
-
-        processed = [value for value, _position in display_items]
-        if can_highlight:
-            self.match_positions = [position for _value, position in display_items]
-
-        # Determine output delimiter
-        delim_map = {"Newline": "\n", "Comma": ", ", "Tab": "\t", "Space": " "}
-        delimiter = delim_map.get(self.delimiter_var.get(), "\n")
+        self.output_text.config(state="normal")
+        self.output_text.delete("1.0", tk.END)
 
         if processed:
             self._toggle_output_empty_state(False)
@@ -945,52 +1182,381 @@ class RegexIsolatorApp:
                     f"\n\n(Output capped at first {self._OUTPUT_MAX_MATCHES} matches)",
                 )
 
-            # Clickable tags only make sense in newline mode
-            self.output_click_enabled = delimiter == "\n" and can_highlight
+            self.output_click_enabled = delimiter == "\n" and can_click and bool(positions)
             self.output_text.config(cursor="hand2" if self.output_click_enabled else "arrow")
+            self.match_positions = positions
             if self.output_click_enabled:
                 for i in range(len(processed)):
                     tag = f"match_{i}"
                     self.output_text.tag_add(tag, f"{i + 1}.0", f"{i + 1}.end")
                     self.output_text.tag_config(tag, foreground=self._PALETTE["accent_dark"])
 
-            source_note = " (cached input)" if text_source == "cache" else ""
-            detail = (
-                "Click a result line to jump back to the source."
-                if self.output_click_enabled
-                else "Results are grouped with the selected delimiter."
-                if can_highlight
-                else "Results extracted. Jump highlighting is disabled for cached or very large input."
-            )
-            if self.unique_matches.get():
-                noun = "result" if len(processed) == 1 else "results"
-                detail = f"{detail} Showing {len(processed):,} unique {noun}."
-            if output_limit_reached:
-                detail = f"{detail} Output is capped at the first {self._OUTPUT_MAX_MATCHES:,} matches."
-
             self.output_meta_label.config(text=detail)
             self._set_match_badge(
                 f"{total_count} match{'es' if total_count != 1 else ''}",
                 tone="accent",
             )
-            if can_highlight:
-                self._set_status(f"Found {total_count} match(es){source_note}", "success")
-            else:
-                self._set_status(
-                    (
-                        f"Found {total_count} match(es){source_note}. "
-                        "Highlight jumps are paused for large or cached input."
-                    ),
-                    "success",
-                )
+            self._set_status(status_text, "success")
         else:
+            self.output_click_enabled = False
+            self.match_positions = []
             self._toggle_output_empty_state(False)
             self.output_text.insert("1.0", "(No matches found)")
-            self.output_meta_label.config(text="No results for the current pattern.")
+            self.output_meta_label.config(text=no_match_detail)
             self._set_match_badge("0 matches", tone="warning")
             self._set_status("No matches found", "warning")
 
         self.output_text.config(state="disabled")
+
+    def _set_file_source_replace_state(self):
+        """Explain why whole-text replacement preview is disabled in file-backed mode."""
+        if not self.replace_entry.get():
+            return
+
+        self.replace_preview_label.config(
+            text=(
+                "Replacement preview is unavailable in file-backed line mode. "
+                "Load smaller text into the editor or cache to preview or copy replacement output."
+            ),
+            foreground=self._PALETTE["muted"],
+        )
+
+    def _cancel_file_scan(self):
+        """Invalidate any pending incremental file scan."""
+        self.scan_generation += 1
+        if self.file_scan_context:
+            file_obj = self.file_scan_context.get("file_obj")
+            if file_obj:
+                try:
+                    file_obj.close()
+                except OSError:
+                    pass
+            output_file_obj = context.get("output_file_obj")
+            if output_file_obj:
+                try:
+                    output_file_obj.close()
+                except OSError:
+                    pass
+            output_file_obj = self.file_scan_context.get("output_file_obj")
+            if output_file_obj:
+                try:
+                    output_file_obj.close()
+                except OSError:
+                    pass
+        self.file_scan_context = None
+        self.scan_in_progress = False
+        self._set_long_operation_active(False)
+
+    def _cancel_active_operation(self):
+        """Cancel an active file-backed scan or streaming save job."""
+        if not self.scan_in_progress:
+            self._set_status("No active file job to cancel", "neutral")
+            return
+
+        operation = "file job"
+        if self.file_scan_context:
+            operation = self.file_scan_context.get("operation_label", operation)
+        self._cancel_file_scan()
+        self._set_match_badge("Canceled", tone="warning")
+        self.output_meta_label.config(text=f"Canceled {operation}.")
+        self._set_status(f"Canceled {operation}", "warning")
+
+    def _process_file_backed(self, pattern):
+        """Scan the current file-backed source incrementally on the Tk event loop."""
+        if not self.file_source_path:
+            return
+
+        file_path = self.file_source_path
+        self._cancel_file_scan()
+        try:
+            file_obj = open(file_path, "rb")
+        except OSError as exc:
+            self._set_match_badge("File error", tone="error")
+            self.output_meta_label.config(text="The file-backed source could not be opened.")
+            self._set_status(f"Failed to open file: {exc}", "error")
+            return
+
+        generation = self.scan_generation
+        self.scan_in_progress = True
+        self._set_long_operation_active(True)
+        self.file_scan_context = {
+            "generation": generation,
+            "operation": "scan",
+            "operation_label": "file scan",
+            "file_path": file_path,
+            "file_obj": file_obj,
+            "pattern": pattern,
+            "group_count": pattern.groups,
+            "total_count": 0,
+            "display_items": [],
+            "records": [],
+            "output_limit_reached": False,
+            "seen": set() if self.unique_matches.get() else None,
+            "line_number": 0,
+            "processed_bytes": 0,
+            "file_size": self.file_source_size,
+        }
+
+        self._toggle_output_empty_state(False)
+        self.output_text.config(state="normal")
+        self.output_text.insert(
+            "1.0",
+            "Scanning file-backed source...\n\nThe file stays on disk and is processed one line at a time.",
+        )
+        self.output_text.config(state="disabled")
+        self._set_match_badge("Scanning...", tone="accent")
+        self.output_meta_label.config(
+            text="Large-file mode is scanning directly from disk in line mode to keep memory usage low."
+        )
+        self._set_status(f"Scanning {os.path.basename(file_path)}...", "neutral")
+        self.root.after(1, lambda: self._continue_file_scan(generation))
+
+    def _format_scan_progress(self, context):
+        """Return a compact progress message for file-backed operations."""
+        filename = os.path.basename(context["file_path"])
+        processed = context.get("processed_bytes", 0)
+        total = context.get("file_size", 0)
+        if total:
+            pct = min(100, int((processed / total) * 100))
+            return (
+                f"Scanning {filename}... {context['line_number']:,} lines checked, "
+                f"{self._format_file_size(processed)} / {self._format_file_size(total)} ({pct}%)"
+            )
+        return f"Scanning {filename}... {context['line_number']:,} lines checked"
+
+    def _continue_file_scan(self, generation):
+        """Process the next slice of a file-backed scan."""
+        context = self.file_scan_context
+        if not context or generation != self.scan_generation or context.get("generation") != generation:
+            return
+
+        try:
+            for _ in range(self._FILE_SCAN_BATCH_LINES):
+                line_bytes = context["file_obj"].readline()
+                if not line_bytes:
+                    self._finish_file_scan(generation)
+                    return
+
+                line = line_bytes.decode("utf-8", errors="replace")
+                context["line_number"] += 1
+                context["processed_bytes"] += len(line_bytes)
+                for match in context["pattern"].finditer(line):
+                    context["total_count"] += 1
+                    value, captures = self._extract_match_value(match, context["group_count"])
+
+                    seen = context["seen"]
+                    if seen is not None:
+                        if value in seen:
+                            continue
+                        seen.add(value)
+
+                    if len(context["display_items"]) < self._OUTPUT_MAX_MATCHES:
+                        context["display_items"].append(value)
+                        context["records"].append(
+                            self._build_file_result_record(
+                                match,
+                                value,
+                                captures,
+                                context["line_number"],
+                                line,
+                            )
+                        )
+                    else:
+                        context["output_limit_reached"] = True
+        except OSError as exc:
+            self._fail_file_scan(generation, exc)
+            return
+
+        progress = self._format_scan_progress(context)
+        self._set_status(progress, "neutral")
+        if context["total_count"]:
+            self._set_match_badge(f"{context['total_count']:,} matches", tone="accent")
+        self.root.after(1, lambda: self._continue_file_scan(generation))
+
+    def _finish_file_scan(self, generation):
+        """Render final results for a completed file-backed scan."""
+        context = self.file_scan_context
+        if not context or generation != self.scan_generation or context.get("generation") != generation:
+            return
+
+        file_obj = context.get("file_obj")
+        if file_obj:
+            try:
+                file_obj.close()
+            except OSError:
+                pass
+
+        self.file_scan_context = None
+        self.scan_in_progress = False
+        self._set_long_operation_active(False)
+        self.result_records = context["records"]
+
+        detail = (
+            "Scanned directly from disk in line mode. Export JSONL keeps line numbers, columns, previews, and capture groups. "
+            "Whole-file anchors and cross-line patterns still require editor or cache mode."
+        )
+        if self.unique_matches.get():
+            noun = "result" if len(context["display_items"]) == 1 else "results"
+            detail = f"{detail} Showing {len(context['display_items']):,} unique {noun}."
+        if context["output_limit_reached"]:
+            detail = f"{detail} Output is capped at the first {self._OUTPUT_MAX_MATCHES:,} matches."
+
+        filename = os.path.basename(context["file_path"])
+        self._render_results(
+            context["display_items"],
+            context["total_count"],
+            detail=detail,
+            no_match_detail="No line-based matches found in the current file-backed source.",
+            status_text=(
+                f"Scanned {context['line_number']:,} lines in {filename} and found "
+                f"{context['total_count']} match(es)"
+            ),
+            can_click=False,
+            output_limit_reached=context["output_limit_reached"],
+        )
+        self._set_file_source_replace_state()
+
+    def _fail_file_scan(self, generation, exc):
+        """Handle an error raised while scanning a file-backed source."""
+        context = self.file_scan_context
+        if context:
+            file_obj = context.get("file_obj")
+            if file_obj:
+                try:
+                    file_obj.close()
+                except OSError:
+                    pass
+
+        self.file_scan_context = None
+        self.scan_in_progress = False
+        self._set_long_operation_active(False)
+        if generation != self.scan_generation:
+            return
+
+        self._toggle_output_empty_state(True)
+        self.output_text.config(state="normal")
+        self.output_text.delete("1.0", tk.END)
+        self.output_text.config(state="disabled")
+        self._set_match_badge("File error", tone="error")
+        label = "file-backed scan"
+        if context:
+            label = context.get("operation_label", label)
+        self.output_meta_label.config(text=f"The {label} could not finish.")
+        self._set_status(f"File job failed: {exc}", "error")
+
+    def _process(self):
+        """Run the regex against the input and update highlights + output."""
+        pattern_str = self._current_pattern_text()
+        self._reset_output_state()
+
+        if pattern_str == "":
+            self.input_text.tag_remove("highlight", "1.0", tk.END)
+            self._set_status("Enter a regex pattern to begin", "neutral")
+            self.output_meta_label.config(text="Start with a pattern to wake up the result pane.")
+            return
+
+        flags = self._get_regex_flags()
+        try:
+            pattern = re.compile(pattern_str, flags)
+        except re.error as exc:
+            self.input_text.tag_remove("highlight", "1.0", tk.END)
+            self._set_match_badge("Invalid pattern", tone="error")
+            self.output_meta_label.config(text="Fix the pattern to see fresh results.")
+            self._set_status(f"Invalid regex: {exc}", "error")
+            return
+
+        if self.file_source_path:
+            if self._line_mode_dotall_requested(pattern_str):
+                self._set_match_badge("Line mode only", tone="warning")
+                self.output_meta_label.config(
+                    text=(
+                        "File-backed mode scans one line at a time. Use the editor or cache mode for cross-line "
+                        "patterns, whole-file anchors, or replacement previews."
+                    )
+                )
+                self._set_status("Dot All requires editor or cache mode", "warning")
+                return
+            self._process_file_backed(pattern)
+            return
+
+        text, text_source = self._get_active_text()
+
+        if not text:
+            self._set_status("Paste or load text to search", "neutral")
+            self.output_meta_label.config(text="The result pane fills once source text is available.")
+            return
+
+        # Highlight every match in the input pane and capture the displayed results.
+        self.input_text.tag_remove("highlight", "1.0", tk.END)
+        self.input_text.tag_remove("selected_match", "1.0", tk.END)
+
+        display_items = []
+        result_records = []
+        match_positions = []
+        total_count = 0
+        group_count = pattern.groups
+        can_highlight = text_source == "input" and len(text) <= self._HIGHLIGHT_MAX_CHARS
+        output_limit_reached = False
+        unique_only = self.unique_matches.get()
+        seen = set() if unique_only else None
+
+        for match in pattern.finditer(text):
+            total_count += 1
+
+            if can_highlight:
+                self.input_text.tag_add(
+                    "highlight",
+                    f"1.0 + {match.start()} chars",
+                    f"1.0 + {match.end()} chars",
+                )
+
+            value, captures = self._extract_match_value(match, group_count)
+
+            if seen is not None:
+                if value in seen:
+                    continue
+                seen.add(value)
+
+            if len(display_items) < self._OUTPUT_MAX_MATCHES:
+                display_items.append(value)
+                result_records.append(self._build_editor_result_record(match, value, captures, text_source))
+                if can_highlight:
+                    match_positions.append((match.start(), match.end()))
+            else:
+                output_limit_reached = True
+
+        self.result_records = result_records
+        source_note = " (cached input)" if text_source == "cache" else ""
+        detail = (
+            "Click a result line to jump back to the source."
+            if can_highlight
+            else "Results extracted. Jump highlighting is disabled for cached or very large input."
+        )
+        detail = f"{detail} Export JSONL keeps offsets and capture groups."
+        if unique_only:
+            noun = "result" if len(display_items) == 1 else "results"
+            detail = f"{detail} Showing {len(display_items):,} unique {noun}."
+        if output_limit_reached:
+            detail = f"{detail} Output is capped at the first {self._OUTPUT_MAX_MATCHES:,} matches."
+
+        status_text = (
+            f"Found {total_count} match(es){source_note}"
+            if can_highlight
+            else (
+                f"Found {total_count} match(es){source_note}. "
+                "Highlight jumps are paused for large or cached input."
+            )
+        )
+        self._render_results(
+            display_items,
+            total_count,
+            detail=detail,
+            no_match_detail="No results for the current pattern.",
+            status_text=status_text,
+            can_click=can_highlight,
+            match_positions=match_positions,
+            output_limit_reached=output_limit_reached,
+        )
 
         # Update replacement preview
         self._update_replace_preview(pattern, text, total_count)
@@ -1004,6 +1570,12 @@ class RegexIsolatorApp:
             self.replace_preview_label.config(text="")
             self.replace_copy_btn.grid_remove()
             self._replace_result = ""
+            return
+
+        if self.file_source_path:
+            self._replace_result = ""
+            self.replace_copy_btn.grid_remove()
+            self._set_file_source_replace_state()
             return
 
         if len(text) > self._LARGE_TEXT_THRESHOLD:
@@ -1047,14 +1619,21 @@ class RegexIsolatorApp:
             self._set_status("Replacement result copied to clipboard", "success")
             return
 
+        if self.file_source_path:
+            self._set_status(
+                "Replacement copy is disabled in file-backed line mode. Load smaller text into the editor or cache first.",
+                "warning",
+            )
+            return
+
         repl = self.replace_entry.get()
         if not repl:
             self._set_status("No replacement pattern set", "warning")
             return
 
-        pattern_str = self.regex_entry.get().strip()
+        pattern_str = self._current_pattern_text()
         text, _ = self._get_active_text()
-        if not pattern_str or not text:
+        if pattern_str == "" or not text:
             self._set_status("Need pattern and input text", "warning")
             return
 
@@ -1119,7 +1698,9 @@ class RegexIsolatorApp:
             return
 
         if content:
+            self._cancel_file_scan()
             self._clear_cached_input_file()
+            self._clear_file_source()
             self.input_text.delete("1.0", tk.END)
             self.input_text.insert("1.0", content)
             self._check_paste_button()
@@ -1128,6 +1709,10 @@ class RegexIsolatorApp:
 
     def _copy_to_clipboard(self):
         """Copy the output matches to the system clipboard."""
+        if self.scan_in_progress:
+            self._set_status("Wait for the active file job to finish before copying results", "warning")
+            return
+
         content = self.output_text.get("1.0", tk.END).strip()
         if not content or content == "(No matches found)":
             messagebox.showwarning("Warning", "No content to copy to clipboard")
@@ -1140,8 +1725,312 @@ class RegexIsolatorApp:
 
     # ── File I/O ─────────────────────────────────────────────────────
 
+    def _compile_current_pattern_for_action(self, *, require_line_mode=False):
+        """Compile the current pattern for save/delete actions."""
+        pattern_str = self._current_pattern_text()
+        if pattern_str == "":
+            self._set_status("Enter a regex pattern first", "warning")
+            return None
+
+        try:
+            compiled = re.compile(pattern_str, self._get_regex_flags())
+        except re.error as exc:
+            self._set_status(f"Invalid regex: {exc}", "error")
+            return None
+
+        if require_line_mode and self._line_mode_dotall_requested(pattern_str):
+            self._set_status("Dot All is not available for gigabyte-safe line-mode file operations", "warning")
+            return None
+
+        return compiled
+
+    def _iter_match_values(self, pattern, text, *, unique_only=None):
+        """Yield displayed match values from text using the app's capture rules."""
+        seen = set() if (self.unique_matches.get() if unique_only is None else unique_only) else None
+        group_count = pattern.groups
+        for match in pattern.finditer(text):
+            value, _captures = self._extract_match_value(match, group_count)
+            if seen is not None:
+                if value in seen:
+                    continue
+                seen.add(value)
+            yield value
+
+    def _write_match_values_to_file(self, pattern, text, path):
+        """Write every match value from text to path without the preview cap."""
+        delimiter = self._delimiter_text()
+        count = 0
+        with open(path, "w", encoding="utf-8") as file_obj:
+            for value in self._iter_match_values(pattern, text):
+                if count:
+                    file_obj.write(delimiter)
+                file_obj.write(value)
+                count += 1
+        return count
+
+    def _keep_only_matches_in_source(self):
+        """Replace editor text with the full match-only output."""
+        if self.scan_in_progress:
+            self._set_status("Wait for the active file job to finish first", "warning")
+            return
+        if self.file_source_path or self.cached_input_path:
+            self._set_status("Use Save Matches for file-backed or cached sources.", "warning")
+            return
+
+        text = self.input_text.get("1.0", "end-1c")
+        if not text:
+            self._set_status("Paste or load editor text first", "warning")
+            return
+
+        pattern = self._compile_current_pattern_for_action()
+        if pattern is None:
+            return
+
+        replacement = self._delimiter_text().join(self._iter_match_values(pattern, text))
+        self.input_text.delete("1.0", tk.END)
+        self.input_text.insert("1.0", replacement)
+        self._reset_output_state()
+        self._check_paste_button()
+        self._set_status("Source replaced with regex matches only", "success")
+        self._on_content_change()
+
+    def _delete_matches_from_source(self):
+        """Delete current regex matches from editor text."""
+        if self.scan_in_progress:
+            self._set_status("Wait for the active file job to finish first", "warning")
+            return
+        if self.file_source_path or self.cached_input_path:
+            self._set_status("Use Save Cleaned for file-backed or cached sources.", "warning")
+            return
+
+        text = self.input_text.get("1.0", "end-1c")
+        if not text:
+            self._set_status("Paste or load editor text first", "warning")
+            return
+
+        pattern = self._compile_current_pattern_for_action()
+        if pattern is None:
+            return
+
+        cleaned, deleted_count = pattern.subn("", text)
+        self.input_text.delete("1.0", tk.END)
+        self.input_text.insert("1.0", cleaned)
+        self._reset_output_state()
+        self._check_paste_button()
+        self._set_status(f"Deleted {deleted_count:,} regex match(es) from the editor source", "success")
+        self._on_content_change()
+
+    def _save_all_matches_to_file(self):
+        """Save every match, not just the previewed rows, to a text file."""
+        if self.scan_in_progress:
+            self._set_status("Wait for the active file job to finish first", "warning")
+            return
+
+        pattern = self._compile_current_pattern_for_action(require_line_mode=bool(self.file_source_path))
+        if pattern is None:
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        if self.file_source_path:
+            self._start_file_output_job(pattern, path, mode="matches")
+            return
+
+        text, _source = self._get_active_text()
+        if not text:
+            self._set_status("Paste, restore, or load text first", "warning")
+            return
+
+        try:
+            count = self._write_match_values_to_file(pattern, text, path)
+        except (OSError, re.error) as exc:
+            messagebox.showerror("Error", f"Failed to save matches:\n{exc}")
+            self._set_status("Save matches failed", "error")
+            return
+
+        self._set_status(f"Saved {count:,} match(es) to {path}", "success")
+
+    def _save_text_without_matches(self):
+        """Save a copy of the source with regex matches removed."""
+        if self.scan_in_progress:
+            self._set_status("Wait for the active file job to finish first", "warning")
+            return
+
+        pattern = self._compile_current_pattern_for_action(require_line_mode=bool(self.file_source_path))
+        if pattern is None:
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        if self.file_source_path:
+            self._start_file_output_job(pattern, path, mode="cleaned")
+            return
+
+        text, _source = self._get_active_text()
+        if not text:
+            self._set_status("Paste, restore, or load text first", "warning")
+            return
+
+        try:
+            cleaned, deleted_count = pattern.subn("", text)
+            with open(path, "w", encoding="utf-8") as file_obj:
+                file_obj.write(cleaned)
+        except (OSError, re.error) as exc:
+            messagebox.showerror("Error", f"Failed to save cleaned text:\n{exc}")
+            self._set_status("Save cleaned text failed", "error")
+            return
+
+        self._set_status(f"Saved cleaned copy to {path} after removing {deleted_count:,} match(es)", "success")
+
+    def _start_file_output_job(self, pattern, output_path, *, mode):
+        """Start a streaming file-backed output job."""
+        if not self.file_source_path:
+            return
+
+        self._cancel_file_scan()
+        file_obj = None
+        try:
+            file_obj = open(self.file_source_path, "rb")
+            output_file_obj = open(output_path, "w", encoding="utf-8")
+        except OSError as exc:
+            if file_obj:
+                try:
+                    file_obj.close()
+                except OSError:
+                    pass
+            self._set_status(f"Could not start file job: {exc}", "error")
+            return
+
+        generation = self.scan_generation
+        operation_label = "save matches" if mode == "matches" else "save cleaned copy"
+        self.scan_in_progress = True
+        self._set_long_operation_active(True)
+        self.file_scan_context = {
+            "generation": generation,
+            "operation": mode,
+            "operation_label": operation_label,
+            "file_path": self.file_source_path,
+            "output_path": output_path,
+            "file_obj": file_obj,
+            "output_file_obj": output_file_obj,
+            "pattern": pattern,
+            "group_count": pattern.groups,
+            "total_count": 0,
+            "written_count": 0,
+            "seen": set() if self.unique_matches.get() and mode == "matches" else None,
+            "line_number": 0,
+            "processed_bytes": 0,
+            "file_size": self.file_source_size,
+            "delimiter": self._delimiter_text(),
+        }
+
+        self._set_match_badge("Saving...", tone="accent")
+        self._set_status(f"Streaming {operation_label} from {os.path.basename(self.file_source_path)}...", "neutral")
+        self.root.after(1, lambda: self._continue_file_output_job(generation))
+
+    def _continue_file_output_job(self, generation):
+        """Process the next slice of a streaming file output job."""
+        context = self.file_scan_context
+        if not context or generation != self.scan_generation or context.get("generation") != generation:
+            return
+
+        try:
+            for _ in range(self._FILE_SCAN_BATCH_LINES):
+                line_bytes = context["file_obj"].readline()
+                if not line_bytes:
+                    self._finish_file_output_job(generation)
+                    return
+
+                line = line_bytes.decode("utf-8", errors="replace")
+                context["line_number"] += 1
+                context["processed_bytes"] += len(line_bytes)
+
+                if context["operation"] == "matches":
+                    for match in context["pattern"].finditer(line):
+                        context["total_count"] += 1
+                        value, _captures = self._extract_match_value(match, context["group_count"])
+                        seen = context["seen"]
+                        if seen is not None:
+                            if value in seen:
+                                continue
+                            seen.add(value)
+                        if context["written_count"]:
+                            context["output_file_obj"].write(context["delimiter"])
+                        context["output_file_obj"].write(value)
+                        context["written_count"] += 1
+                else:
+                    cleaned, deleted_count = context["pattern"].subn("", line)
+                    context["total_count"] += deleted_count
+                    context["output_file_obj"].write(cleaned)
+        except (OSError, re.error) as exc:
+            self._fail_file_scan(generation, exc)
+            return
+
+        filename = os.path.basename(context["file_path"])
+        processed = context["processed_bytes"]
+        total = context["file_size"]
+        pct = min(100, int((processed / total) * 100)) if total else 0
+        if context["operation"] == "matches":
+            badge = f"{context['written_count']:,} saved"
+        else:
+            badge = f"{context['total_count']:,} removed"
+        self._set_match_badge(badge, tone="accent")
+        self._set_status(
+            (
+                f"Streaming {context['operation_label']} from {filename}... "
+                f"{self._format_file_size(processed)} / {self._format_file_size(total)} ({pct}%)"
+            ),
+            "neutral",
+        )
+        self.root.after(1, lambda: self._continue_file_output_job(generation))
+
+    def _finish_file_output_job(self, generation):
+        """Finish a streaming file-backed output job."""
+        context = self.file_scan_context
+        if not context or generation != self.scan_generation or context.get("generation") != generation:
+            return
+
+        for key in ("file_obj", "output_file_obj"):
+            file_obj = context.get(key)
+            if file_obj:
+                try:
+                    file_obj.close()
+                except OSError:
+                    pass
+
+        self.file_scan_context = None
+        self.scan_in_progress = False
+        self._set_long_operation_active(False)
+
+        if context["operation"] == "matches":
+            self._set_match_badge(f"{context['written_count']:,} saved", tone="accent")
+            self._set_status(
+                f"Saved {context['written_count']:,} match(es) to {context['output_path']}",
+                "success",
+            )
+        else:
+            self._set_match_badge(f"{context['total_count']:,} removed", tone="accent")
+            self._set_status(
+                f"Saved cleaned copy to {context['output_path']} after removing {context['total_count']:,} match(es)",
+                "success",
+            )
+
     def _save_to_file(self):
         """Save output matches to a user-chosen text file."""
+        if self.scan_in_progress:
+            self._set_status("Wait for the active file job to finish before saving results", "warning")
+            return
+
         content = self.output_text.get("1.0", tk.END).strip()
         if not content or content == "(No matches found)":
             messagebox.showwarning("Warning", "No content to save")
@@ -1161,6 +2050,33 @@ class RegexIsolatorApp:
                 messagebox.showerror("Error", f"Failed to save file:\n{exc}")
                 self._set_status("Save failed", "error")
 
+    def _export_results_jsonl(self):
+        """Export the current structured result rows as JSON Lines."""
+        if self.scan_in_progress:
+            self._set_status("Wait for the active file job to finish before exporting JSONL", "warning")
+            return
+
+        if not self.result_records:
+            messagebox.showwarning("Warning", "No structured results to export")
+            self._set_status("Nothing to export", "error")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".jsonl",
+            filetypes=[("JSON Lines", "*.jsonl"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8") as file_obj:
+                for record in self.result_records:
+                    file_obj.write(json.dumps(record, ensure_ascii=False) + "\n")
+            self._set_status(f"Exported {len(self.result_records):,} structured rows to {path}", "success")
+        except OSError as exc:
+            messagebox.showerror("Error", f"Failed to export JSONL:\n{exc}")
+            self._set_status("JSONL export failed", "error")
+
     def _load_from_file(self):
         """Load a text file into the input area."""
         path = filedialog.askopenfilename(
@@ -1168,11 +2084,18 @@ class RegexIsolatorApp:
         )
         if path:
             try:
-                with open(path, "r", encoding="utf-8") as f:
-                    content = f.read()
+                size = os.path.getsize(path)
+                self._cancel_file_scan()
+                if size > self._EDITOR_LOAD_MAX_BYTES:
+                    self._activate_file_source(path, size)
+                    return
+
+                content = self._read_text_file(path)
                 self._clear_cached_input_file()
+                self._clear_file_source()
                 self.input_text.delete("1.0", tk.END)
                 self.input_text.insert("1.0", content)
+                self._reset_output_state()
                 self._check_paste_button()
                 self._set_status(f"Loaded {path}", "success")
                 self._on_content_change()
@@ -1183,10 +2106,15 @@ class RegexIsolatorApp:
     def _cache_input(self):
         """Move current input text into a temp file cache and unload textbox content."""
         text = self.input_text.get("1.0", "end-1c")
+        if not text and self.file_source_path:
+            self._set_status("The current source is already file-backed. Press Match Now to scan it directly.", "warning")
+            return
         if not text:
             self._set_status("No input text to cache", "warning")
             return
 
+        self._cancel_file_scan()
+        self._clear_file_source()
         self._clear_cached_input_file()
 
         try:
@@ -1221,18 +2149,46 @@ class RegexIsolatorApp:
             return
 
         try:
-            with open(self.cached_input_path, "r", encoding="utf-8") as f:
-                content = f.read()
+            self._cancel_file_scan()
+            content = self._read_text_file(self.cached_input_path)
         except OSError as exc:
             self._set_status(f"Restore failed: {exc}", "error")
             return
 
         self.input_text.delete("1.0", tk.END)
         self.input_text.insert("1.0", content)
+        self._clear_file_source()
         self._clear_cached_input_file()
         self._check_paste_button()
         self._set_status("Restored cached input", "success")
         self._on_content_change()
+
+    def _read_text_file(self, path):
+        """Read text using UTF-8 with replacement so large logs are more forgiving."""
+        with open(path, "r", encoding="utf-8", errors="replace") as file_obj:
+            return file_obj.read()
+
+    def _activate_file_source(self, path, size):
+        """Switch the app into direct file mode without loading the file into the editor."""
+        self._clear_cached_input_file()
+        self._clear_file_source()
+        self.file_source_path = path
+        self.file_source_size = size
+        self.input_text.delete("1.0", tk.END)
+        self.input_text.tag_remove("highlight", "1.0", tk.END)
+        self.input_text.tag_remove("selected_match", "1.0", tk.END)
+        self._reset_output_state()
+        self.live_matching.set(False)
+        self._sync_live_mode_badge()
+        self._check_paste_button()
+        self._update_pattern_coach()
+        self._set_status(
+            (
+                f"Loaded {os.path.basename(path)} in file-backed mode "
+                f"({self._format_file_size(size)}). Press Match Now to scan it line by line."
+            ),
+            "success",
+        )
 
     def _get_active_text(self):
         """Return active input text and source ('input' or 'cache')."""
@@ -1242,12 +2198,17 @@ class RegexIsolatorApp:
 
         if self.cached_input_path:
             try:
-                with open(self.cached_input_path, "r", encoding="utf-8") as f:
-                    return f.read(), "cache"
+                return self._read_text_file(self.cached_input_path), "cache"
             except OSError:
                 self._clear_cached_input_file()
 
         return "", "input"
+
+    def _clear_file_source(self):
+        """Forget the current file-backed source selection."""
+        self.file_source_path = None
+        self.file_source_size = 0
+        self._update_pattern_coach()
 
     def _clear_cached_input_file(self):
         """Delete and forget the current cache file if it exists."""
@@ -1311,6 +2272,31 @@ class RegexIsolatorApp:
             ("Multiline",   "re.MULTILINE  — ^ and $ match each line"),
             ("Dot All",     "re.DOTALL     — . matches newline too"),
         ]),
+        ("Replacement", [
+            (r"\1",          "Insert capture group 1 in a replacement"),
+            (r"\g<name>",    "Insert a named capture group"),
+            (r"\n \t",       "Insert newline or tab in replacement text"),
+            ("Delete",       "Use an empty replacement to remove matches"),
+        ]),
+        ("Large File Workflow", [
+            ("Line mode",    "Files over 16 MiB stay on disk and scan one line at a time"),
+            ("Save Matches", "Streams every match to a file without the 5,000-row preview cap"),
+            ("Save Cleaned", "Streams a copy with matches removed without loading the source"),
+            ("Cancel Job",   "Stops long file scans and streaming save jobs"),
+        ]),
+        ("Performance Tips", [
+            ("literal",      "Start with a literal or anchored prefix when possible"),
+            (".*",           "Avoid leading or repeated dot-star on huge input"),
+            ("(?:...)",      "Use non-capturing groups when you do not need captures"),
+            ("{0,200}",      "Prefer bounded repeats over open-ended wildcards"),
+            ("line-safe",    "Use file-backed mode for gigabyte logs; avoid Dot All there"),
+        ]),
+        ("Common Recipes", [
+            ("Email",        r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
+            ("IPv4",         r"\b\d{1,3}(?:\.\d{1,3}){3}\b"),
+            ("Quoted text",  r'"([^"\\]|\\.)*"'),
+            ("Log level",    r"\b(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\b"),
+        ]),
     ]
 
     def _show_help(self):
@@ -1322,8 +2308,8 @@ class RegexIsolatorApp:
             return
 
         win = tk.Toplevel(self.root)
-        win.title("Regex Syntax Reference")
-        win.geometry("520x600")
+        win.title("Regex Tutorial and Syntax Reference")
+        win.geometry("640x720")
         win.resizable(True, True)
         win.configure(bg=self._PALETTE["bg"])
         self._help_win = win
@@ -1373,34 +2359,25 @@ class RegexIsolatorApp:
 
     def _clear_all(self):
         """Reset every field to its default empty state."""
+        self._cancel_file_scan()
         self.regex_entry.delete(0, tk.END)
         self.replace_entry.delete(0, tk.END)
         self.input_text.delete("1.0", tk.END)
         self.input_text.tag_remove("highlight", "1.0", tk.END)
         self.input_text.tag_remove("selected_match", "1.0", tk.END)
-        self.output_text.config(state="normal")
-        self.output_text.delete("1.0", tk.END)
-        self.output_text.config(state="disabled", cursor="arrow")
-        self.match_positions.clear()
-        self.output_click_enabled = False
+        self._reset_output_state()
         self._check_paste_button()
-        self._set_match_badge("0 matches", tone="neutral")
-        self.output_meta_label.config(
-            text="Run a pattern to isolate results. In newline mode, clicking a line jumps back to the source span."
-        )
-        self._toggle_output_empty_state(True)
         self.unique_matches.set(False)
         self.delimiter_var.set("Newline")
         self.preset_var.set(self._PRESET_PLACEHOLDER)
         self.preset_name_entry.delete(0, tk.END)
-        self.replace_preview_label.config(text="")
-        self.replace_copy_btn.grid_remove()
-        self._replace_result = ""
+        self._clear_file_source()
         self._clear_cached_input_file()
         self._set_status("Cleared", "success")
 
     def _on_close(self):
         """Clean up temporary cache files before exiting."""
+        self._cancel_file_scan()
         self._clear_cached_input_file()
         self.root.destroy()
 

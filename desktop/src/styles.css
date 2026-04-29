@@ -1,0 +1,546 @@
+:root {
+  font-family: "Aptos", "Segoe UI", Arial, sans-serif;
+  color: #1f2933;
+  background: #edf1f3;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 12px;
+  height: 100vh;
+  min-height: 0;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.app-shell.studio-minimized {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.app-header,
+.pattern-dock,
+.panel,
+.help-card {
+  border: 1px solid #d5dde2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 64px;
+  padding: 12px 14px;
+}
+
+.app-header h1,
+.panel h2,
+.file-card h3,
+.help-card h3 {
+  margin: 0;
+  font-family: "Bahnschrift", "Aptos Display", "Segoe UI", sans-serif;
+  letter-spacing: 0;
+}
+
+.app-header h1 {
+  font-size: 1.35rem;
+}
+
+.eyebrow,
+.panel-label,
+.support-copy,
+.detail-banner p,
+.help-row span,
+.record-card small,
+.file-card dt,
+.status-strip {
+  margin: 0;
+  font-size: 0.84rem;
+  color: #667582;
+}
+
+.header-actions,
+.toolbar-row,
+.flag-row,
+.status-strip,
+.pattern-dock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.primary-button,
+.ghost-button,
+.record-card {
+  border: 1px solid #c9d3da;
+  border-radius: 6px;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.primary-button,
+.ghost-button {
+  min-height: 36px;
+  padding: 7px 11px;
+  white-space: nowrap;
+}
+
+.primary-button {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.primary-button:hover {
+  background: #115e59;
+  border-color: #115e59;
+}
+
+.ghost-button {
+  background: #f7fafb;
+  color: #20303a;
+}
+
+.ghost-button:hover,
+.record-card:hover:not(:disabled) {
+  background: #eef6f5;
+  border-color: #8fbfba;
+}
+
+.control-grid,
+.workspace-grid,
+.help-panel {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+}
+
+.control-grid {
+  grid-template-columns: minmax(0, 2.2fr) minmax(300px, 0.9fr);
+}
+
+.workspace-grid {
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
+}
+
+.panel {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px;
+  overflow: hidden;
+}
+
+.panel-soft {
+  background: #fbfcfd;
+}
+
+.workspace-grid > .panel {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.workspace-grid > .result-panel {
+  grid-template-rows: auto auto auto minmax(120px, 0.7fr) auto minmax(0, 1fr);
+}
+
+.panel-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.sticky-row {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-bottom: 2px;
+  background: inherit;
+}
+
+.mode-pill,
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mode-pill-live {
+  background: #ddf7ee;
+  color: #047857;
+}
+
+.mode-pill-manual {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.mode-pill-warning,
+.status-badge {
+  background: #dff3fb;
+  color: #075985;
+}
+
+.field {
+  display: grid;
+  gap: 5px;
+}
+
+.field span {
+  color: #586875;
+  font-size: 0.88rem;
+}
+
+.field input,
+.field select,
+.source-editor,
+.output-editor,
+.pattern-dock input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cbd5dc;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f2933;
+  padding: 8px 10px;
+}
+
+.field input:focus,
+.field select:focus,
+.source-editor:focus,
+.output-editor:focus,
+.pattern-dock input:focus {
+  border-color: #0f766e;
+  outline: 2px solid rgba(15, 118, 110, 0.18);
+}
+
+.compact-field {
+  width: 160px;
+}
+
+.flag-row {
+  row-gap: 7px;
+}
+
+.flag-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #32424d;
+  font-size: 0.9rem;
+}
+
+.pattern-coach,
+.detail-banner,
+.file-card,
+.empty-card,
+.progress-panel,
+.warning-list,
+.error-banner,
+.migration-note {
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.pattern-coach {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #d8e2e7;
+  background: #f7fafb;
+}
+
+.pattern-coach p {
+  margin: 0;
+  color: #52616d;
+}
+
+.pattern-coach-success {
+  border-color: #b7e4d4;
+}
+
+.pattern-coach-warning {
+  border-color: #f5d48b;
+}
+
+.pattern-coach-error {
+  border-color: #f3aaa5;
+}
+
+.pattern-dock {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) auto auto auto;
+  padding: 8px;
+}
+
+.coach-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #94a3ad;
+}
+
+.coach-dot-success {
+  background: #0f766e;
+}
+
+.coach-dot-warning {
+  background: #b7791f;
+}
+
+.coach-dot-error {
+  background: #c24135;
+}
+
+.source-editor,
+.output-editor {
+  min-height: 0;
+  height: 100%;
+  resize: none;
+  font-family: "Cascadia Code", Consolas, monospace;
+  line-height: 1.45;
+}
+
+.output-editor {
+  min-height: 150px;
+}
+
+.file-card {
+  display: grid;
+  gap: 10px;
+  background: #f4f8fa;
+  border: 1px solid #d8e2e7;
+}
+
+.file-card dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.file-card div {
+  display: grid;
+  gap: 2px;
+}
+
+.file-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.status-strip {
+  justify-content: space-between;
+}
+
+.warning-list {
+  display: grid;
+  gap: 6px;
+  background: #fff8e1;
+  color: #8a5a0a;
+}
+
+.warning-list p,
+.error-banner,
+.progress-path,
+.record-card p,
+.empty-card p,
+.help-row,
+.record-card small,
+.migration-note p {
+  margin: 0;
+}
+
+.error-banner {
+  background: #fde8e6;
+  color: #a3332b;
+}
+
+.detail-banner,
+.migration-note {
+  display: grid;
+  gap: 6px;
+  background: #f4f8fa;
+  border: 1px solid #d8e2e7;
+}
+
+.progress-panel {
+  display: grid;
+  gap: 8px;
+  background: #eff8fb;
+  border: 1px solid #cde8f2;
+}
+
+.progress-row,
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 9px;
+  border: none;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #dbe5ea;
+}
+
+.progress-bar::-webkit-progress-bar {
+  background: #dbe5ea;
+  border-radius: 999px;
+}
+
+.progress-bar::-webkit-progress-value {
+  background: #0f766e;
+  border-radius: 999px;
+}
+
+.progress-bar::-moz-progress-bar {
+  background: #0f766e;
+  border-radius: 999px;
+}
+
+.progress-path {
+  overflow-wrap: anywhere;
+  color: #667582;
+}
+
+.record-list {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.record-card {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 10px;
+  text-align: left;
+  background: #ffffff;
+  color: inherit;
+}
+
+.record-card:disabled {
+  cursor: default;
+  opacity: 0.78;
+}
+
+.record-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.record-card strong,
+.empty-card strong {
+  font-size: 0.96rem;
+}
+
+.empty-card {
+  display: grid;
+  gap: 5px;
+  background: #f7fafb;
+  border: 1px dashed #cbd5dc;
+}
+
+.help-panel {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  overflow: auto;
+}
+
+.help-card {
+  padding: 12px;
+}
+
+.help-row {
+  display: grid;
+  gap: 4px;
+  padding: 8px 0;
+  border-top: 1px solid #e2e8ec;
+}
+
+.help-row code {
+  color: #0f766e;
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+
+@media (max-width: 1100px) {
+  .app-shell {
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
+  }
+
+  .control-grid,
+  .workspace-grid,
+  .pattern-dock {
+    grid-template-columns: 1fr;
+  }
+
+  .app-header,
+  .panel-heading,
+  .record-card-header,
+  .status-strip {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .header-actions,
+  .toolbar-row {
+    width: 100%;
+  }
+
+  .primary-button,
+  .ghost-button {
+    width: 100%;
+  }
+}

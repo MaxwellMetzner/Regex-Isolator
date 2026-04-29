@@ -1,0 +1,21 @@
+[package]
+name = "regex-isolator-desktop"
+version = "0.1.0"
+description = "Regex Isolator desktop rewrite powered by Tauri and Rust"
+authors = ["Maxwell Metzner"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.82"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+fancy-regex = "0.14"
+regex = "1.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+uuid = { version = "1", features = ["v4"] }
+walkdir = "2"
