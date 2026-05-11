@@ -1,4 +1,4 @@
-import { useMemo, type FormEvent, type RefObject } from "react";
+import { useMemo, useRef, type ChangeEvent, type RefObject, type UIEvent } from "react";
 
 import type { FileSource } from "../types";
 
@@ -11,7 +11,7 @@ interface SourcePanelProps {
   fileSource: FileSource | null;
   sourceText: string;
   sourceModeLabel: string;
-  sourceEditorRef: RefObject<HTMLDivElement | null>;
+  sourceEditorRef: RefObject<HTMLTextAreaElement | null>;
   matchRanges: MatchRange[];
   onSourceTextChange: (value: string) => void;
   onPaste: () => void;
@@ -79,6 +79,10 @@ function buildHighlightSegments(sourceText: string, matchRanges: MatchRange[]) {
   return segments.length ? segments : [{ text: sourceText, highlight: false }];
 }
 
+function segmentKey(segment: { text: string; highlight: boolean }, index: number) {
+  return `${segment.highlight ? "match" : "text"}-${index}-${segment.text.length}`;
+}
+
 export function SourcePanel({
   fileSource,
   sourceText,
@@ -94,10 +98,20 @@ export function SourcePanel({
   onKeepMatches,
   onDeleteMatches,
 }: SourcePanelProps) {
+  const highlightLayerRef = useRef<HTMLDivElement | null>(null);
   const highlightSegments = useMemo(() => buildHighlightSegments(sourceText, matchRanges), [matchRanges, sourceText]);
 
-  function handleEditorInput(event: FormEvent<HTMLDivElement>) {
-    onSourceTextChange(event.currentTarget.textContent ?? "");
+  function handleEditorChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    onSourceTextChange(event.currentTarget.value);
+  }
+
+  function handleEditorScroll(event: UIEvent<HTMLTextAreaElement>) {
+    if (!highlightLayerRef.current) {
+      return;
+    }
+
+    highlightLayerRef.current.scrollTop = event.currentTarget.scrollTop;
+    highlightLayerRef.current.scrollLeft = event.currentTarget.scrollLeft;
   }
 
   return (
@@ -107,14 +121,18 @@ export function SourcePanel({
           <p className="panel-label">Source</p>
           <h2>{sourceModeLabel}</h2>
         </div>
-        <div className="toolbar-row">
-          <button className="primary-button" onClick={onPaste} title="Replace the editor source with clipboard text.">Paste</button>
-          <button className="ghost-button" onClick={onPickFile} title="Open a text file. Large files stay on disk and scan directly.">Load file</button>
-          <button className="ghost-button" onClick={onSaveSource} disabled={Boolean(fileSource)} title="Save the editor text. Loaded editor files ask before overwriting; otherwise you can choose a new file.">Save source</button>
-          <button className="ghost-button" onClick={onSaveWithoutMatches} title="Save a copy of the source with the current regex matches removed.">Save without matches</button>
-          <button className="ghost-button" onClick={onClearSource} title="Clear only the source and current results. The regex pattern and options stay as they are.">Clear source</button>
-          <button className="ghost-button" onClick={onKeepMatches} disabled={Boolean(fileSource)} title="Replace the editor text with only the full regex matches, joined by the selected delimiter. Capture groups do not change this action.">Keep matches</button>
-          <button className="ghost-button" onClick={onDeleteMatches} disabled={Boolean(fileSource)} title="Remove the current regex matches from the editor text.">Delete matches</button>
+        <div className="toolbar-row source-toolbar">
+          <div className="button-group">
+            <button className="primary-button" onClick={onPaste} title="Replace the editor source with clipboard text.">Paste clipboard</button>
+            <button className="ghost-button" onClick={onPickFile} title="Open a text file. Large files stay on disk and scan directly.">Load file</button>
+            <button className="ghost-button" onClick={onSaveSource} disabled={Boolean(fileSource)} title="Save the editor text. Loaded editor files ask before overwriting; otherwise you can choose a new file.">Save source</button>
+            <button className="ghost-button" onClick={onClearSource} title="Clear only the source and current results. The regex pattern and options stay as they are.">Clear</button>
+          </div>
+          <div className="button-group button-group-separated">
+            <button className="ghost-button" onClick={onDeleteMatches} disabled={Boolean(fileSource)} title="Remove the current regex matches from the editor text.">Delete matches</button>
+            <button className="ghost-button" onClick={onKeepMatches} disabled={Boolean(fileSource)} title="Replace the editor text with only the full regex matches, joined by the selected delimiter. Capture groups do not change this action.">Keep only matches</button>
+            <button className="ghost-button" onClick={onSaveWithoutMatches} title="Save a copy of the source with the current regex matches removed.">Save without matches</button>
+          </div>
         </div>
       </div>
 
@@ -142,23 +160,26 @@ export function SourcePanel({
         </div>
       ) : (
         <div className="source-editor-shell">
-          <div
+          <div ref={highlightLayerRef} className="source-editor-highlight-layer" aria-hidden="true">
+            {highlightSegments.map((segment, index) => (
+              segment.highlight ? (
+                <mark key={segmentKey(segment, index)} className="source-match-highlight">{segment.text}</mark>
+              ) : (
+                <span key={segmentKey(segment, index)}>{segment.text}</span>
+              )
+            ))}
+          </div>
+          <textarea
             ref={sourceEditorRef}
             className="source-editor source-editor-content"
-            contentEditable="plaintext-only"
-            data-placeholder="Paste source text here or load a file."
-            onInput={handleEditorInput}
-            role="textbox"
-            aria-multiline="true"
+            value={sourceText}
+            placeholder="Paste source text here or load a file."
+            onChange={handleEditorChange}
+            onScroll={handleEditorScroll}
+            aria-label="Source text"
             spellCheck={false}
-            suppressContentEditableWarning
-          >{highlightSegments.map((segment, index) => (
-              segment.highlight ? (
-                <mark key={index} className="source-match-highlight">{segment.text}</mark>
-              ) : (
-                <span key={index}>{segment.text}</span>
-              )
-            ))}</div>
+            wrap="soft"
+          />
         </div>
       )}
     </article>

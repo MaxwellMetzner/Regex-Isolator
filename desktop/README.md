@@ -1,45 +1,32 @@
-# Regex Isolator
+# Regex Isolator Desktop
 
-This is the Regex Isolator app: React for the web UI, with Tauri 2 + Rust available for packaged local-file workflows.
-
-## What Works
-
-- compact web UI with a collapsible Pattern Studio
-- Rust-backed editor scans
-- file-backed large-file scans with progress and cancellation
-- hybrid regex engine selection
-  - `regex` for the fast path
-  - `fancy-regex` fallback for advanced constructs such as lookaround
-- pattern preview and performance coaching
-- custom presets in local storage
-- plain-text output save
-- JSONL export
-- source text save from the editor
-- save-without-matches output from editor or single-file sources
-- keep-only-matches and delete-matches editor transforms
-- editor-mode replacement copy with familiar numbered and named backreferences
-- regex help and large-file guidance
+This folder contains the React/Vite UI and the Tauri 2 + Rust desktop shell for Regex Isolator.
 
 ## Commands
 
-From this folder:
-
 ```bash
 npm install
+npm run dev
 npm run build
 cargo check --manifest-path src-tauri/Cargo.toml
 npm run tauri dev
 ```
 
-## Portable Build Output
+## App Surface
 
-After the release build, the executable is written to:
+- `src/` contains the React app, panels, browser regex fallback, presets, and regex help data.
+- `src-tauri/src/scanner/` contains the Rust scan engine, file/directory jobs, transforms, and export commands.
+- `scripts/` contains icon generation and repeatable portable build helpers.
+
+## Build Outputs
+
+Tauri release builds write the executable to:
 
 ```text
 desktop/src-tauri/target/release/regex-isolator-desktop.exe
 ```
 
-The repeatable portable build script stages a copy here:
+The portable helper stages a copy here:
 
 ```text
 desktop/artifacts/portable/regex-isolator-desktop.exe
@@ -51,9 +38,9 @@ Run:
 npm run build:portable
 ```
 
-## Signing-Ready Flow
+## Signing
 
-The portable build script can sign the executable if these environment variables are present:
+The portable build script signs the executable when these variables are set:
 
 ```text
 SIGNTOOL_PATH
@@ -67,9 +54,11 @@ Run:
 npm run build:portable:signed
 ```
 
-If those variables are not present, the script still produces an unsigned portable executable.
+Without those variables, the script still produces an unsigned portable executable.
 
-## Notes
+## Scanner Notes
 
-- Dot All is blocked in file line mode, including inline `(?s)` forms.
-- Replacement handling supports familiar numbered/named backreferences and common escapes.
+- Editor mode supports full-text matches, source highlighting, result jumps, replacement copy, and source transforms.
+- File and directory mode scan one line at a time for memory safety.
+- Dot All and inline `(?s)` forms are blocked in line mode because they imply cross-line matching.
+- The Rust scanner tries the fast `regex` engine first and falls back to `fancy-regex` when advanced constructs require it.

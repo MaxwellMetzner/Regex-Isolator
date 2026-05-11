@@ -4,8 +4,8 @@ interface ResultsPanelProps {
   scanResponse: ScanResponse | null;
   isBusy: boolean;
   errorMessage: string | null;
-  onCopyOutput: () => void;
-  onSaveOutput: () => void;
+  onExportTxt: () => void;
+  onExportCsv: () => void;
   onExportJsonl: () => void;
   onJumpToRecord: (record: ScanRecord) => void;
 }
@@ -14,8 +14,8 @@ export function ResultsPanel({
   scanResponse,
   isBusy,
   errorMessage,
-  onCopyOutput,
-  onSaveOutput,
+  onExportTxt,
+  onExportCsv,
   onExportJsonl,
   onJumpToRecord,
 }: ResultsPanelProps) {
@@ -33,9 +33,9 @@ export function ResultsPanel({
           <h2>{scanResponse ? `${scanResponse.totalMatches.toLocaleString()} matches` : "No results yet"}</h2>
         </div>
         <div className="toolbar-row">
-          <button className="ghost-button" onClick={onCopyOutput} disabled={isBusy} title="Copy the displayed results to the clipboard.">Copy</button>
-          <button className="ghost-button" onClick={onSaveOutput} disabled={isBusy} title="Save the current result matches as a text file.">Save</button>
-          <button className="primary-button" onClick={onExportJsonl} disabled={isBusy} title="Export displayed structured rows as JSON Lines with offsets, paths, and capture groups.">Export JSONL</button>
+          <button className="primary-button" onClick={onExportTxt} disabled={isBusy} title="Export displayed result matches as a text file.">Export TXT</button>
+          <button className="ghost-button" onClick={onExportCsv} disabled={isBusy} title="Export displayed structured rows as comma-separated values.">Export CSV</button>
+          <button className="ghost-button" onClick={onExportJsonl} disabled={isBusy} title="Export displayed structured rows as JSON Lines with offsets, paths, and capture groups.">Export JSONL</button>
         </div>
       </div>
 

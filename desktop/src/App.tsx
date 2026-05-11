@@ -104,57 +104,188 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function utf8WidthForCodePoint(codePoint: number) {
+  return codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+}
+
+function utf8ByteOffsetsToUtf16Indexes(text: string, byteOffsets: number[]) {
+  const indexedOffsets = byteOffsets
+    .map((offset, index) => ({ offset: Math.max(0, offset), index }))
+    .sort((left, right) => left.offset - right.offset);
+  const indexes = new Array<number>(byteOffsets.length);
+  let utf8Offset = 0;
+  let utf16Index = 0;
+  let offsetIndex = 0;
+
+  function settleConvertedOffsets() {
+    while (offsetIndex < indexedOffsets.length && indexedOffsets[offsetIndex].offset <= utf8Offset) {
+      indexes[indexedOffsets[offsetIndex].index] = utf16Index;
+      offsetIndex += 1;
+    }
+  }
+
+  settleConvertedOffsets();
+
+  while (utf16Index < text.length && offsetIndex < indexedOffsets.length) {
+    const codePoint = text.codePointAt(utf16Index) ?? 0;
+    const utf16Width = codePoint > 0xffff ? 2 : 1;
+    utf8Offset += utf8WidthForCodePoint(codePoint);
+    utf16Index += utf16Width;
+    settleConvertedOffsets();
+  }
+
+  while (offsetIndex < indexedOffsets.length) {
+    indexes[indexedOffsets[offsetIndex].index] = text.length;
+    offsetIndex += 1;
+  }
+
+  return indexes;
+}
+
+function utf8ByteOffsetToUtf16Index(text: string, byteOffset: number) {
+  return utf8ByteOffsetsToUtf16Indexes(text, [byteOffset])[0] ?? text.length;
+}
+
+function scanOffsetToEditorIndex(sourceText: string, offset: number) {
+  return IS_TAURI_RUNTIME ? utf8ByteOffsetToUtf16Index(sourceText, offset) : offset;
+}
+
+function scanRangesToEditorRanges(sourceText: string, records: ScanRecord[]) {
+  const ranges = records
+    .filter((record) => record.source === "text" && typeof record.start === "number" && typeof record.end === "number")
+    .map((record) => ({ start: record.start as number, end: record.end as number }));
+
+  if (!IS_TAURI_RUNTIME) {
+    return ranges;
+  }
+
+  const convertedOffsets = utf8ByteOffsetsToUtf16Indexes(
+    sourceText,
+    ranges.flatMap((range) => [range.start, range.end]),
+  );
+
+  return ranges.map((_range, index) => ({
+    start: convertedOffsets[index * 2] ?? sourceText.length,
+    end: convertedOffsets[index * 2 + 1] ?? sourceText.length,
+  }));
+}
+
+function csvCell(value: unknown) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+function recordsToCsv(records: ScanRecord[]) {
+  const headers = [
+    "match",
+    "fullMatch",
+    "captures",
+    "source",
+    "filePath",
+    "line",
+    "columnStart",
+    "columnEnd",
+    "start",
+    "end",
+    "preview",
+  ];
+  const rows = records.map((record) => [
+    record.match,
+    record.fullMatch,
+    JSON.stringify(record.captures),
+    record.source,
+    record.filePath,
+    record.line,
+    record.columnStart,
+    record.columnEnd,
+    record.start,
+    record.end,
+    record.preview,
+  ]);
+
+  return [
+    headers.map(csvCell).join(","),
+    ...rows.map((row) => row.map(csvCell).join(",")),
+  ].join("\n") + "\n";
+}
+
 interface EditorSourceFile {
   path?: string;
   name: string;
 }
 
-function textPointAtOffset(root: HTMLElement, targetOffset: number) {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let currentOffset = 0;
-  let node = walker.nextNode();
-
-  while (node) {
-    const textLength = node.textContent?.length ?? 0;
-    if (currentOffset + textLength >= targetOffset) {
-      return {
-        node,
-        offset: Math.max(0, Math.min(textLength, targetOffset - currentOffset)),
-      };
-    }
-
-    currentOffset += textLength;
-    node = walker.nextNode();
-  }
-
-  return {
-    node: root,
-    offset: root.childNodes.length,
-  };
+function numericStyleValue(value: string, fallback: number) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function selectEditableRange(root: HTMLElement, start: number, end: number) {
-  const range = document.createRange();
-  const startPoint = textPointAtOffset(root, start);
-  const endPoint = textPointAtOffset(root, end);
-  range.setStart(startPoint.node, startPoint.offset);
-  range.setEnd(endPoint.node, endPoint.offset);
+function lineHeightForElement(element: HTMLElement) {
+  const style = window.getComputedStyle(element);
+  const fontSize = numericStyleValue(style.fontSize, 14);
+  return numericStyleValue(style.lineHeight, fontSize * 1.38);
+}
 
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-  root.focus();
+function measureTextareaOffset(editor: HTMLTextAreaElement, offset: number) {
+  const style = window.getComputedStyle(editor);
+  const mirror = document.createElement("div");
+  const marker = document.createElement("span");
+  const safeOffset = Math.max(0, Math.min(editor.value.length, offset));
 
-  const rangeRect = range.getBoundingClientRect();
-  const rootRect = root.getBoundingClientRect();
-  if (rangeRect.height > 0) {
-    root.scrollTop += rangeRect.top - rootRect.top - root.clientHeight / 2 + rangeRect.height / 2;
-    root.scrollLeft += rangeRect.left - rootRect.left - 20;
-  }
+  mirror.style.position = "absolute";
+  mirror.style.visibility = "hidden";
+  mirror.style.pointerEvents = "none";
+  mirror.style.top = "0";
+  mirror.style.left = "-9999px";
+  mirror.style.boxSizing = "border-box";
+  mirror.style.width = `${editor.clientWidth}px`;
+  mirror.style.minHeight = "0";
+  mirror.style.margin = "0";
+  mirror.style.border = "0";
+  mirror.style.padding = style.padding;
+  mirror.style.fontFamily = style.fontFamily;
+  mirror.style.fontSize = style.fontSize;
+  mirror.style.fontWeight = style.fontWeight;
+  mirror.style.fontStyle = style.fontStyle;
+  mirror.style.letterSpacing = style.letterSpacing;
+  mirror.style.lineHeight = style.lineHeight;
+  mirror.style.tabSize = style.tabSize;
+  mirror.style.whiteSpace = style.whiteSpace;
+  mirror.style.overflowWrap = style.overflowWrap;
+  mirror.style.wordBreak = style.wordBreak;
+  mirror.style.overflow = "hidden";
+
+  marker.textContent = "\u200b";
+  mirror.textContent = editor.value.slice(0, safeOffset);
+  mirror.append(marker);
+  document.body.append(mirror);
+
+  const measuredTop = marker.offsetTop;
+  mirror.remove();
+  return measuredTop;
+}
+
+function scrollTextareaRangeIntoView(editor: HTMLTextAreaElement, start: number) {
+  const markerTop = measureTextareaOffset(editor, start);
+  const lineHeight = lineHeightForElement(editor);
+  const centeredTop = markerTop - (editor.clientHeight - lineHeight) / 2;
+  const maxScrollTop = Math.max(0, editor.scrollHeight - editor.clientHeight);
+  editor.scrollTop = Math.max(0, Math.min(maxScrollTop, centeredTop));
+}
+
+function selectEditableRange(editor: HTMLTextAreaElement, start: number, end: number) {
+  const safeStart = Math.max(0, Math.min(editor.value.length, start));
+  const safeEnd = Math.max(safeStart, Math.min(editor.value.length, end));
+  editor.focus();
+  editor.setSelectionRange(safeStart, safeEnd);
+  scrollTextareaRangeIntoView(editor, safeStart);
+  editor.dispatchEvent(new Event("scroll", { bubbles: true }));
 }
 
 export default function App() {
-  const sourceEditorRef = useRef<HTMLDivElement | null>(null);
+  const sourceEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
   const [pattern, setPattern] = useState("");
   const [replacement, setReplacement] = useState("");
@@ -586,44 +717,25 @@ export default function App() {
     setStatusMessage(`Deleted preset "${name}".`);
   }
 
-  async function handleCopyOutput() {
+  async function handleExportTxt() {
     if (activeJobId) {
-      setStatusMessage("Wait for the background scan to finish before copying output.");
+      setStatusMessage("Wait for the background scan to finish before exporting TXT.");
       return;
     }
 
-    if (!scanResponse?.output) {
-      setStatusMessage("Nothing to copy.");
-      return;
-    }
-
-    try {
-      await copyText(scanResponse.output);
-      setStatusMessage("Copied result output to the clipboard.");
-    } catch (error) {
-      handleOperationError(error);
-    }
-  }
-
-  async function handleSaveOutput() {
-    if (activeJobId) {
-      setStatusMessage("Wait for the background scan to finish before saving output.");
-      return;
-    }
-
-    if (!scanResponse?.output) {
-      setStatusMessage("Nothing to save.");
+    if (!scanResponse || (!scanResponse.output && !scanResponse.records.length)) {
+      setStatusMessage("Nothing to export.");
       return;
     }
 
     if (!IS_TAURI_RUNTIME) {
       downloadTextFile("regex-isolator-results.txt", scanResponse.output);
-      setStatusMessage("Downloaded result output.");
+      setStatusMessage("Downloaded TXT results.");
       return;
     }
 
     const target = await save({
-      title: "Save output",
+      title: "Export TXT",
       filters: [{ name: "Text", extensions: ["txt"] }],
       defaultPath: await defaultDownloadPath("regex-isolator-results.txt"),
     });
@@ -634,7 +746,44 @@ export default function App() {
 
     try {
       await invoke("save_text_output", { path: target, content: scanResponse.output });
-      setStatusMessage(`Saved result output to ${target}.`);
+      setStatusMessage(`Exported TXT results to ${target}.`);
+    } catch (error) {
+      handleOperationError(error);
+    }
+  }
+
+  async function handleExportCsv() {
+    if (activeJobId) {
+      setStatusMessage("Wait for the background scan to finish before exporting CSV.");
+      return;
+    }
+
+    if (!scanResponse?.records.length) {
+      setStatusMessage("Nothing to export.");
+      return;
+    }
+
+    const csv = recordsToCsv(scanResponse.records);
+
+    if (!IS_TAURI_RUNTIME) {
+      downloadTextFile("regex-isolator-results.csv", csv, "text/csv;charset=utf-8");
+      setStatusMessage(`Downloaded ${scanResponse.records.length.toLocaleString()} CSV row(s).`);
+      return;
+    }
+
+    const target = await save({
+      title: "Export CSV",
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+      defaultPath: await defaultDownloadPath("regex-isolator-results.csv"),
+    });
+
+    if (typeof target !== "string") {
+      return;
+    }
+
+    try {
+      await invoke("save_text_output", { path: target, content: csv });
+      setStatusMessage(`Exported ${scanResponse.records.length.toLocaleString()} CSV row(s) to ${target}.`);
     } catch (error) {
       handleOperationError(error);
     }
@@ -829,7 +978,11 @@ export default function App() {
       return;
     }
 
-    selectEditableRange(sourceEditorRef.current, record.start, record.end);
+    selectEditableRange(
+      sourceEditorRef.current,
+      scanOffsetToEditorIndex(sourceText, record.start),
+      scanOffsetToEditorIndex(sourceText, record.end),
+    );
   }
 
   const customPresetNames = Object.keys(customPresets).sort((left, right) => left.localeCompare(right));
@@ -850,10 +1003,18 @@ export default function App() {
         : "No source loaded";
   const modeLabel = directorySource ? "Folder source" : fileSource ? "File source" : liveMatching ? "Auto match" : "Manual match";
   const sourceMatchRanges = scanResponse?.sourceKind === "text"
-    ? scanResponse.records
-        .filter((record) => record.source === "text" && typeof record.start === "number" && typeof record.end === "number")
-        .map((record) => ({ start: record.start as number, end: record.end as number }))
+    ? scanRangesToEditorRanges(sourceText, scanResponse.records)
     : [];
+  const progressPercent = typeof jobProgress?.percent === "number"
+    ? `${Math.round(jobProgress.percent)}%`
+    : null;
+  const displayedStatusMessage = jobProgress
+    ? [
+        jobProgress.message,
+        progressPercent,
+        `${jobProgress.matchesFound.toLocaleString()} match(es)`,
+      ].filter(Boolean).join(" | ")
+    : statusMessage || scanResponse?.detail || "Ready";
 
   return (
     <div className={`app-shell ${isPatternStudioMinimized ? "studio-minimized" : ""}`}>
@@ -863,6 +1024,7 @@ export default function App() {
           <h1>Regex Isolator</h1>
         </div>
         <div className="header-actions">
+          <p className="app-status" role="status" aria-live="polite" title={displayedStatusMessage}>{displayedStatusMessage}</p>
           <button className="ghost-button" onClick={() => setShowHelp((current) => !current)} title="Show or hide the regex syntax reference.">
             {showHelp ? "Hide help" : "Regex help"}
           </button>
@@ -942,8 +1104,8 @@ export default function App() {
           scanResponse={scanResponse}
           isBusy={isBusy}
           errorMessage={errorMessage}
-          onCopyOutput={() => void handleCopyOutput()}
-          onSaveOutput={() => void handleSaveOutput()}
+          onExportTxt={() => void handleExportTxt()}
+          onExportCsv={() => void handleExportCsv()}
           onExportJsonl={() => void handleExportJsonl()}
           onJumpToRecord={jumpToRecord}
         />

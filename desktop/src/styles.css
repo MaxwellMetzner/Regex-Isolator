@@ -86,8 +86,7 @@ button:disabled {
 .panel-label,
 .support-copy,
 .help-row span,
-.file-card dt,
-.status-strip {
+.file-card dt {
   margin: 0;
   font-size: 0.84rem;
   color: #667582;
@@ -99,13 +98,39 @@ button:disabled {
 
 .header-actions,
 .toolbar-row,
+.button-group,
 .flag-row,
-.status-strip,
 .pattern-dock {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.app-status {
+  max-width: min(52vw, 720px);
+  margin: 0;
+  overflow: hidden;
+  color: #667582;
+  font-size: 0.84rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-toolbar {
+  align-items: stretch;
+}
+
+.button-group {
+  padding: 3px;
+  border: 1px solid #d9e2e7;
+  border-radius: 6px;
+  background: #f8fbfc;
+}
+
+.button-group-separated {
+  background: #fffaf0;
+  border-color: #efd79b;
 }
 
 .primary-button,
@@ -284,12 +309,7 @@ button:disabled {
 }
 
 .pattern-coach,
-.file-card,
-.empty-card,
-.progress-panel,
-.warning-list,
-.error-banner,
-.migration-note {
+.file-card {
   border-radius: 6px;
   padding: 7px 8px;
 }
@@ -441,28 +461,70 @@ button:disabled {
   outline: 2px solid rgba(15, 118, 110, 0.18);
 }
 
+.source-editor-highlight-layer,
 .source-editor-content {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
+  margin: 0;
   border: 0;
   border-radius: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   outline: none;
   padding: 8px 10px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.92rem;
+  line-height: 1.38;
+  letter-spacing: 0;
+  tab-size: 4;
   white-space: pre-wrap;
   overflow-wrap: break-word;
-  word-break: break-word;
+  word-break: normal;
+  scrollbar-gutter: stable;
+}
+
+.source-editor-highlight-layer {
+  pointer-events: none;
+  color: #1f2933;
+  user-select: none;
+  scrollbar-color: transparent transparent;
+  z-index: 0;
+}
+
+.source-editor-highlight-layer::-webkit-scrollbar {
+  width: 17px;
+  height: 17px;
+}
+
+.source-editor-highlight-layer::-webkit-scrollbar-thumb,
+.source-editor-highlight-layer::-webkit-scrollbar-track,
+.source-editor-highlight-layer::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.source-editor-content {
+  display: block;
+  background: transparent;
+  color: transparent;
+  caret-color: #1f2933;
+  z-index: 1;
+  -webkit-text-fill-color: transparent;
+}
+
+.source-editor-content::placeholder {
+  color: #667582;
+  -webkit-text-fill-color: #667582;
+}
+
+.source-editor-content::selection {
+  background: rgba(15, 118, 110, 0.24);
 }
 
 .source-editor-content:focus {
   border-color: transparent;
   outline: none;
-}
-
-.source-editor-content:empty::before {
-  content: attr(data-placeholder);
-  color: #667582;
-  pointer-events: none;
 }
 
 .source-match-highlight {
@@ -495,91 +557,8 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
-.status-strip {
-  justify-content: space-between;
-}
-
-.warning-list {
-  display: grid;
-  gap: 6px;
-  background: #fff8e1;
-  color: #8a5a0a;
-}
-
-.warning-list p,
-.error-banner,
-.progress-path,
-.empty-card p,
-.help-row,
-.migration-note p {
+.help-row {
   margin: 0;
-}
-
-.error-banner {
-  background: #fde8e6;
-  color: #a3332b;
-}
-
-.migration-note {
-  display: grid;
-  gap: 4px;
-  background: #f4f8fa;
-  border: 1px solid #d8e2e7;
-}
-
-.progress-panel {
-  display: grid;
-  gap: 6px;
-  background: #eff8fb;
-  border: 1px solid #cde8f2;
-}
-
-.progress-row,
-.progress-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.progress-bar {
-  width: 100%;
-  height: 9px;
-  border: none;
-  border-radius: 999px;
-  overflow: hidden;
-  background: #dbe5ea;
-}
-
-.progress-bar::-webkit-progress-bar {
-  background: #dbe5ea;
-  border-radius: 999px;
-}
-
-.progress-bar::-webkit-progress-value {
-  background: #0f766e;
-  border-radius: 999px;
-}
-
-.progress-bar::-moz-progress-bar {
-  background: #0f766e;
-  border-radius: 999px;
-}
-
-.progress-path {
-  overflow-wrap: anywhere;
-  color: #667582;
-}
-
-.empty-card strong {
-  font-size: 0.9rem;
-}
-
-.empty-card {
-  display: grid;
-  gap: 5px;
-  background: #f7fafb;
-  border: 1px dashed #cbd5dc;
 }
 
 .help-panel {
@@ -618,8 +597,7 @@ button:disabled {
   }
 
   .app-header,
-  .panel-heading,
-  .status-strip {
+  .panel-heading {
     align-items: stretch;
     flex-direction: column;
   }
@@ -627,6 +605,11 @@ button:disabled {
   .header-actions,
   .toolbar-row {
     width: 100%;
+  }
+
+  .app-status {
+    max-width: none;
+    white-space: normal;
   }
 
   .primary-button,
