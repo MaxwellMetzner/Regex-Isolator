@@ -8,6 +8,8 @@ This folder contains the React/Vite UI and the Tauri 2 + Rust desktop shell for 
 npm install
 npm run dev
 npm run build
+npm run build:installer
+npm run build:portable
 cargo check --manifest-path src-tauri/Cargo.toml
 npm run tauri dev
 ```
@@ -16,20 +18,44 @@ npm run tauri dev
 
 - `src/` contains the React app, panels, browser regex fallback, presets, and regex help data.
 - `src-tauri/src/scanner/` contains the Rust scan engine, file/directory jobs, transforms, and export commands.
-- `scripts/` contains icon generation and repeatable portable build helpers.
+- `scripts/` contains icon generation and repeatable Windows release helpers.
 
 ## Build Outputs
+
+Stage a Windows installer with:
+
+```bash
+npm run build:installer
+```
+
+The staged installer output lands at:
+
+```text
+artifacts/installer/
+```
+
+The raw NSIS bundle remains under:
+
+```text
+src-tauri/target/release/bundle/nsis/
+```
+
+Create a signed installer with:
+
+```bash
+npm run build:installer:signed
+```
 
 Tauri release builds write the executable to:
 
 ```text
-desktop/src-tauri/target/release/regex-isolator-desktop.exe
+src-tauri/target/release/regex-isolator-desktop.exe
 ```
 
 The portable helper stages a copy here:
 
 ```text
-desktop/artifacts/portable/regex-isolator-desktop.exe
+artifacts/portable/regex-isolator-desktop.exe
 ```
 
 Run:
@@ -40,7 +66,7 @@ npm run build:portable
 
 ## Signing
 
-The portable build script signs the executable when these variables are set:
+The installer and portable build scripts sign staged artifacts when these variables are set:
 
 ```text
 SIGNTOOL_PATH
@@ -51,10 +77,11 @@ WINDOWS_TIMESTAMP_URL
 Run:
 
 ```bash
+npm run build:installer:signed
 npm run build:portable:signed
 ```
 
-Without those variables, the script still produces an unsigned portable executable.
+Without those variables, the scripts still produce unsigned artifacts.
 
 ## Scanner Notes
 

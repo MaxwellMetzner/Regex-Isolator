@@ -7,6 +7,8 @@
     "dev": "vite --port 1420",
     "build": "tsc && vite build",
     "build:icons": "powershell -ExecutionPolicy Bypass -File ./scripts/generate-icons.ps1",
+    "build:installer": "powershell -ExecutionPolicy Bypass -File ./scripts/build-installer.ps1",
+    "build:installer:signed": "powershell -ExecutionPolicy Bypass -File ./scripts/build-installer.ps1 -Sign",
     "build:portable": "powershell -ExecutionPolicy Bypass -File ./scripts/build-portable.ps1",
     "build:portable:signed": "powershell -ExecutionPolicy Bypass -File ./scripts/build-portable.ps1 -Sign",
     "build:installer:nsis": "tauri build --bundles nsis",

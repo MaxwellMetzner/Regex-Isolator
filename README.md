@@ -2,6 +2,29 @@
 
 Regex Isolator is a desktop-first regex workbench for quickly extracting, inspecting, transforming, and exporting matches from text. It runs as a React/Vite app in the browser during development and as a Tauri 2 app with a Rust scan backend for local-file workflows.
 
+## Windows Download
+
+If you just want to use Regex Isolator on Windows, download the latest setup executable from the latest release.
+
+- Recommended download: `Regex Isolator_<version>_x64-setup.exe`
+- Portable fallback: `regex-isolator-desktop.exe`
+
+The setup executable is the best option for most people because it:
+
+- installs the app into your user profile without requiring administrator rights
+- creates the normal Windows shortcuts and uninstall entry
+- checks for the Microsoft Edge WebView2 runtime and installs or updates it when needed
+
+You do not need Node.js, Rust, or Tauri to use a release build.
+
+## Install on Windows
+
+1. Download the latest `Regex Isolator_<version>_x64-setup.exe` from the latest release.
+2. Run the installer.
+3. Launch Regex Isolator from the Start menu.
+
+If WebView2 is already installed, setup is effectively just the app install. If it is missing or out of date, the installer handles that dependency for you.
+
 ## Highlights
 
 - Editor-backed regex scanning with source-side match highlighting and result-click jump navigation.
@@ -21,17 +44,21 @@ Regex Isolator is a desktop-first regex workbench for quickly extracting, inspec
 └── desktop/
     ├── src/             # React UI
     ├── src-tauri/       # Tauri shell and Rust scanner
-    ├── scripts/         # icon and portable build helpers
+    ├── scripts/         # icon and Windows release helpers
     └── package.json
 ```
 
-## Requirements
+## Build From Source
+
+These requirements only apply if you are developing or building Regex Isolator yourself.
+
+### Requirements
 
 - Node.js and npm
 - Rust toolchain 1.82 or newer
 - Tauri system dependencies for your platform
 
-## Quick Start
+### Quick Start
 
 ```bash
 cd desktop
@@ -48,7 +75,7 @@ cd desktop
 npm run tauri dev
 ```
 
-## Build
+### Build
 
 Build and type-check the web UI:
 
@@ -62,6 +89,19 @@ Check the Rust scanner and Tauri commands:
 ```bash
 cd desktop
 cargo check --manifest-path src-tauri/Cargo.toml
+```
+
+Create a Windows installer:
+
+```bash
+cd desktop
+npm run build:installer
+```
+
+The installer output is staged at:
+
+```text
+desktop/artifacts/installer/
 ```
 
 Create a portable Windows executable:
@@ -92,7 +132,7 @@ desktop/artifacts/portable/regex-isolator-desktop.exe
 
 ## Release Notes
 
-The Windows portable build can be signed when these environment variables are available:
+The Windows installer and portable build scripts sign staged artifacts when these environment variables are available:
 
 ```text
 SIGNTOOL_PATH
@@ -104,7 +144,16 @@ Then run:
 
 ```bash
 cd desktop
+npm run build:installer:signed
 npm run build:portable:signed
+```
+
+Unsigned release artifacts can still be built with:
+
+```bash
+cd desktop
+npm run build:installer
+npm run build:portable
 ```
 
 ## License
