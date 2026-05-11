@@ -132,17 +132,17 @@ pub(crate) fn build_replacement_preview(
         ));
     }
 
-    let replacement_plan = translate_python_replacement(&request.replacement);
+    let replacement_plan = translate_replacement_syntax(&request.replacement);
     let replaced = engine.replace_all(source_text, &replacement_plan.translated)?;
     let preview = truncate_preview(&replaced, PREVIEW_MAX_CHARS);
     let mut notes = replacement_plan.notes;
     notes.push(
-        "Python-style replacement syntax is accepted here, including \\1, \\g<1>, and \\g<name> backreferences.".to_string(),
+        "Replacement syntax accepts \\1, \\g<1>, and \\g<name> backreferences.".to_string(),
     );
     Ok((Some(preview), Some(notes.join(" "))))
 }
 
-pub(crate) fn translate_python_replacement(replacement: &str) -> ReplacementPlan {
+pub(crate) fn translate_replacement_syntax(replacement: &str) -> ReplacementPlan {
     let mut translated = String::new();
     let mut notes = Vec::new();
     let mut saw_backreference = false;
@@ -228,7 +228,7 @@ pub(crate) fn translate_python_replacement(replacement: &str) -> ReplacementPlan
 
     if saw_backreference {
         notes.push(
-            "Backreferences in Python replacement form were translated for the Rust backend."
+            "Backreferences were translated for the Rust backend."
                 .to_string(),
         );
     }

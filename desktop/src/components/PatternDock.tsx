@@ -21,13 +21,13 @@ export function PatternDock({
 }: PatternDockProps) {
   return (
     <section className="pattern-dock" aria-label="Minimized pattern studio">
-      <span className="status-badge">{modeLabel}</span>
+      <span className="status-badge" title="Auto match runs after edits. Manual match waits for the Match now button.">{modeLabel}</span>
       <input value={pattern} onChange={(event) => onPatternChange(event.target.value)} placeholder="Enter a regex pattern" />
       <span className={`coach-dot coach-dot-${patternAnalysis.tone}`} title={patternAnalysis.hints.join(" ")} />
-      <button className="primary-button" onClick={onRunScan} disabled={isBusy}>
+      <button className="primary-button" onClick={onRunScan} disabled={isBusy} title="Run the current regex against the active source immediately.">
         {isBusy ? "Scanning..." : "Match now"}
       </button>
-      <button className="ghost-button" onClick={onRestore}>
+      <button className="ghost-button" onClick={onRestore} title="Show replacement, flags, presets, and output options.">
         Expand studio
       </button>
     </section>

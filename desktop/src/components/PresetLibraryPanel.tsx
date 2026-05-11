@@ -24,7 +24,7 @@ export function PresetLibraryPanel({
       <div className="panel-heading">
         <div>
           <p className="panel-label">Preset Library</p>
-          <h2>Built-ins plus saved workflows</h2>
+          <h2>Presets</h2>
         </div>
       </div>
 
@@ -48,14 +48,8 @@ export function PresetLibraryPanel({
       </label>
 
       <div className="toolbar-row">
-        <button className="ghost-button" onClick={onSavePreset}>Save preset</button>
-        <button className="ghost-button" onClick={onDeletePreset}>Delete preset</button>
-      </div>
-
-      <div className="migration-note">
-        <p>Migration note</p>
-        <strong>Rust scans use a hybrid engine path.</strong>
-        <span>Fast patterns stay on `regex`. Advanced constructs such as lookaround fall back to `fancy-regex` so current behavior is not dropped during the rewrite.</span>
+        <button className="ghost-button" onClick={onSavePreset} title="Save the pattern, replacement, flags, delimiter, and auto-match setting.">Save preset</button>
+        <button className="ghost-button" onClick={onDeletePreset} title="Delete the selected custom preset. Built-in presets stay available.">Delete preset</button>
       </div>
     </article>
   );

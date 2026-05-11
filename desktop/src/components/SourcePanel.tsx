@@ -1,17 +1,24 @@
-import type { RefObject } from "react";
+import { useMemo, type FormEvent, type RefObject } from "react";
 
-import type { DirectorySource, FileSource } from "../types";
+import type { FileSource } from "../types";
+
+interface MatchRange {
+  start: number;
+  end: number;
+}
 
 interface SourcePanelProps {
-  directorySource: DirectorySource | null;
   fileSource: FileSource | null;
   sourceText: string;
   sourceModeLabel: string;
-  sourceEditorRef: RefObject<HTMLTextAreaElement | null>;
+  sourceEditorRef: RefObject<HTMLDivElement | null>;
+  matchRanges: MatchRange[];
   onSourceTextChange: (value: string) => void;
   onPaste: () => void;
   onPickFile: () => void;
-  onPickDirectory: () => void;
+  onClearSource: () => void;
+  onSaveSource: () => void;
+  onSaveWithoutMatches: () => void;
   onKeepMatches: () => void;
   onDeleteMatches: () => void;
 }
@@ -33,19 +40,66 @@ function formatFileSize(size: number) {
   return `${value.toFixed(1)} ${units[unitIndex]}`;
 }
 
+function buildHighlightSegments(sourceText: string, matchRanges: MatchRange[]) {
+  if (!sourceText) {
+    return [];
+  }
+
+  const ranges = matchRanges
+    .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start)
+    .map((range) => ({
+      start: Math.max(0, Math.min(sourceText.length, range.start)),
+      end: Math.max(0, Math.min(sourceText.length, range.end)),
+    }))
+    .filter((range) => range.end > range.start)
+    .sort((left, right) => left.start - right.start || right.end - left.end);
+
+  const segments: Array<{ text: string; highlight: boolean }> = [];
+  let cursor = 0;
+
+  for (const range of ranges) {
+    const start = Math.max(cursor, range.start);
+    const end = Math.max(start, range.end);
+
+    if (start > cursor) {
+      segments.push({ text: sourceText.slice(cursor, start), highlight: false });
+    }
+
+    if (end > start) {
+      segments.push({ text: sourceText.slice(start, end), highlight: true });
+    }
+
+    cursor = end;
+  }
+
+  if (cursor < sourceText.length) {
+    segments.push({ text: sourceText.slice(cursor), highlight: false });
+  }
+
+  return segments.length ? segments : [{ text: sourceText, highlight: false }];
+}
+
 export function SourcePanel({
-  directorySource,
   fileSource,
   sourceText,
   sourceModeLabel,
   sourceEditorRef,
+  matchRanges,
   onSourceTextChange,
   onPaste,
   onPickFile,
-  onPickDirectory,
+  onClearSource,
+  onSaveSource,
+  onSaveWithoutMatches,
   onKeepMatches,
   onDeleteMatches,
 }: SourcePanelProps) {
+  const highlightSegments = useMemo(() => buildHighlightSegments(sourceText, matchRanges), [matchRanges, sourceText]);
+
+  function handleEditorInput(event: FormEvent<HTMLDivElement>) {
+    onSourceTextChange(event.currentTarget.textContent ?? "");
+  }
+
   return (
     <article className="panel panel-elevated">
       <div className="panel-heading sticky-row">
@@ -54,37 +108,17 @@ export function SourcePanel({
           <h2>{sourceModeLabel}</h2>
         </div>
         <div className="toolbar-row">
-          <button className="primary-button" onClick={onPaste}>Paste</button>
-          <button className="ghost-button" onClick={onPickFile}>Load file</button>
-          <button className="ghost-button" onClick={onPickDirectory}>Load folder</button>
-          <button className="ghost-button" onClick={onKeepMatches} disabled={Boolean(fileSource || directorySource)}>Keep matches</button>
-          <button className="ghost-button" onClick={onDeleteMatches} disabled={Boolean(fileSource || directorySource)}>Delete matches</button>
+          <button className="primary-button" onClick={onPaste} title="Replace the editor source with clipboard text.">Paste</button>
+          <button className="ghost-button" onClick={onPickFile} title="Open a text file. Large files stay on disk and scan directly.">Load file</button>
+          <button className="ghost-button" onClick={onSaveSource} disabled={Boolean(fileSource)} title="Save the editor text. Loaded editor files ask before overwriting; otherwise you can choose a new file.">Save source</button>
+          <button className="ghost-button" onClick={onSaveWithoutMatches} title="Save a copy of the source with the current regex matches removed.">Save without matches</button>
+          <button className="ghost-button" onClick={onClearSource} title="Clear only the source and current results. The regex pattern and options stay as they are.">Clear source</button>
+          <button className="ghost-button" onClick={onKeepMatches} disabled={Boolean(fileSource)} title="Replace the editor text with only the full regex matches, joined by the selected delimiter. Capture groups do not change this action.">Keep matches</button>
+          <button className="ghost-button" onClick={onDeleteMatches} disabled={Boolean(fileSource)} title="Remove the current regex matches from the editor text.">Delete matches</button>
         </div>
       </div>
 
-      {directorySource ? (
-        <div className="file-card">
-          <div>
-            <p className="panel-label">Selected directory</p>
-            <h3>{directorySource.name}</h3>
-          </div>
-          <dl>
-            <div>
-              <dt>Path</dt>
-              <dd>{directorySource.path}</dd>
-            </div>
-            <div>
-              <dt>Mode</dt>
-              <dd>Recursive line-by-line directory scan</dd>
-            </div>
-            <div>
-              <dt>Behavior</dt>
-              <dd>Background job with progress and cancelation</dd>
-            </div>
-          </dl>
-          <p className="support-copy">Every file under the selected folder is scanned through the Rust backend. Results keep file paths, line numbers, previews, and capture groups.</p>
-        </div>
-      ) : fileSource ? (
+      {fileSource ? (
         <div className="file-card">
           <div>
             <p className="panel-label">Selected large file</p>
@@ -107,13 +141,25 @@ export function SourcePanel({
           <p className="support-copy">The file stays on disk and is scanned by the Rust backend without loading the whole thing into the editor.</p>
         </div>
       ) : (
-        <textarea
-          ref={sourceEditorRef}
-          className="source-editor"
-          value={sourceText}
-          onChange={(event) => onSourceTextChange(event.target.value)}
-          placeholder="Paste source text here or load a file."
-        />
+        <div className="source-editor-shell">
+          <div
+            ref={sourceEditorRef}
+            className="source-editor source-editor-content"
+            contentEditable="plaintext-only"
+            data-placeholder="Paste source text here or load a file."
+            onInput={handleEditorInput}
+            role="textbox"
+            aria-multiline="true"
+            spellCheck={false}
+            suppressContentEditableWarning
+          >{highlightSegments.map((segment, index) => (
+              segment.highlight ? (
+                <mark key={index} className="source-match-highlight">{segment.text}</mark>
+              ) : (
+                <span key={index}>{segment.text}</span>
+              )
+            ))}</div>
+        </div>
       )}
     </article>
   );

@@ -1,7 +1,7 @@
 [package]
 name = "regex-isolator-desktop"
 version = "0.1.0"
-description = "Regex Isolator desktop rewrite powered by Tauri and Rust"
+description = "Regex Isolator packaged app powered by Tauri and Rust"
 authors = ["Maxwell Metzner"]
 license = "MIT"
 edition = "2021"

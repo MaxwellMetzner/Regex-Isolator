@@ -29,7 +29,7 @@ export const REGEX_HELP: Array<{ title: string; rows: Array<[string, string]> }>
     rows: [
       ["(...)", "Capturing group"],
       ["(?:...)", "Non-capturing group"],
-      ["(?P<name>...)", "Named group in Python-style syntax"],
+      ["(?P<name>...)", "Named capture group syntax"],
       [String.raw`\1`, "Back-reference to group 1"],
       ["(a|b)", "Alternation"],
     ],
@@ -64,8 +64,8 @@ export const REGEX_HELP: Array<{ title: string; rows: Array<[string, string]> }>
     title: "Large Files",
     rows: [
       ["Line mode", "Large files stay on disk"],
-      ["Save all matches", "Streams every match beyond preview limits"],
-      ["Save cleaned", "Writes a copy with matches removed"],
+      ["Save", "Writes the current result matches to disk"],
+      ["Save without matches", "Writes a copy with matches removed"],
       ["Dot All", "Use editor mode for true cross-line matching"],
     ],
   },

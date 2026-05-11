@@ -1,13 +1,12 @@
-# Regex Isolator Desktop
+# Regex Isolator
 
-This is the sole Regex Isolator app: Tauri 2 + React + Rust.
+This is the Regex Isolator app: React for the web UI, with Tauri 2 + Rust available for packaged local-file workflows.
 
 ## What Works
 
-- modern desktop UI with a collapsible Pattern Studio
+- compact web UI with a collapsible Pattern Studio
 - Rust-backed editor scans
 - file-backed large-file scans with progress and cancellation
-- recursive folder scans
 - hybrid regex engine selection
   - `regex` for the fast path
   - `fancy-regex` fallback for advanced constructs such as lookaround
@@ -15,10 +14,10 @@ This is the sole Regex Isolator app: Tauri 2 + React + Rust.
 - custom presets in local storage
 - plain-text output save
 - JSONL export
-- save all matches from editor, file, or folder sources
-- save cleaned output from editor or single-file sources
+- source text save from the editor
+- save-without-matches output from editor or single-file sources
 - keep-only-matches and delete-matches editor transforms
-- editor-mode replacement copy with Python-style replacement backreferences
+- editor-mode replacement copy with familiar numbered and named backreferences
 - regex help and large-file guidance
 
 ## Commands
@@ -72,5 +71,5 @@ If those variables are not present, the script still produces an unsigned portab
 
 ## Notes
 
-- Dot All is blocked in file and folder line mode, including inline `(?s)` forms.
-- Replacement parity focuses on Python-style backreferences and common escapes used by the previous app.
+- Dot All is blocked in file line mode, including inline `(?s)` forms.
+- Replacement handling supports familiar numbered/named backreferences and common escapes.

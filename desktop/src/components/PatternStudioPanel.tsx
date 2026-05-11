@@ -61,22 +61,27 @@ export function PatternStudioPanel({
       <div className="panel-heading">
         <div>
           <p className="panel-label">Pattern Studio</p>
-          <h2>Pattern, replacement, and scan options</h2>
+          <h2>Pattern and scan options</h2>
         </div>
-        <span className={`mode-pill ${hasBackgroundSource ? "mode-pill-warning" : liveMatching ? "mode-pill-live" : "mode-pill-manual"}`}>
+        <span
+          className={`mode-pill ${hasBackgroundSource ? "mode-pill-warning" : liveMatching ? "mode-pill-live" : "mode-pill-manual"}`}
+          title="Auto match runs after edits. Manual match waits for the Match now button. File sources always use manual background scans."
+        >
           {modeLabel}
         </span>
       </div>
 
-      <label className="field">
-        <span>Pattern</span>
-        <input value={pattern} onChange={(event) => onPatternChange(event.target.value)} placeholder="Enter a regex pattern" />
-      </label>
+      <div className="pattern-field-grid">
+        <label className="field">
+          <span>Pattern</span>
+          <input value={pattern} onChange={(event) => onPatternChange(event.target.value)} placeholder="Enter a regex pattern" />
+        </label>
 
-      <label className="field">
-        <span>Replacement</span>
-        <input value={replacement} onChange={(event) => onReplacementChange(event.target.value)} placeholder="Optional replacement" />
-      </label>
+        <label className="field">
+          <span>Replacement</span>
+          <input value={replacement} onChange={(event) => onReplacementChange(event.target.value)} placeholder="Optional replacement" />
+        </label>
+      </div>
 
       <div className={`pattern-coach pattern-coach-${patternAnalysis.tone}`}>
         <strong>{patternAnalysis.captureSummary}</strong>
@@ -85,11 +90,11 @@ export function PatternStudioPanel({
       </div>
 
       <div className="flag-row">
-        <label><input type="checkbox" checked={liveMatching} disabled={hasBackgroundSource} onChange={(event) => onLiveMatchingChange(event.target.checked)} /> Live matching</label>
-        <label><input type="checkbox" checked={ignoreCase} onChange={(event) => onIgnoreCaseChange(event.target.checked)} /> Ignore case</label>
-        <label><input type="checkbox" checked={multiline} onChange={(event) => onMultilineChange(event.target.checked)} /> Multiline</label>
-        <label><input type="checkbox" checked={dotAll} onChange={(event) => onDotAllChange(event.target.checked)} /> Dot all</label>
-        <label><input type="checkbox" checked={uniqueOnly} onChange={(event) => onUniqueOnlyChange(event.target.checked)} /> Unique only</label>
+        <label title="Run the regex automatically after editor changes. Disabled for file sources."><input type="checkbox" checked={liveMatching} disabled={hasBackgroundSource} onChange={(event) => onLiveMatchingChange(event.target.checked)} /> Auto match</label>
+        <label title="Case-insensitive matching."><input type="checkbox" checked={ignoreCase} onChange={(event) => onIgnoreCaseChange(event.target.checked)} /> Ignore case</label>
+        <label title="Make ^ and $ match the start and end of each line."><input type="checkbox" checked={multiline} onChange={(event) => onMultilineChange(event.target.checked)} /> Multiline</label>
+        <label title="Make . match newline characters too."><input type="checkbox" checked={dotAll} onChange={(event) => onDotAllChange(event.target.checked)} /> Dot all</label>
+        <label title="Show each extracted match value only once."><input type="checkbox" checked={uniqueOnly} onChange={(event) => onUniqueOnlyChange(event.target.checked)} /> Unique only</label>
       </div>
 
       <div className="toolbar-row">
@@ -102,18 +107,18 @@ export function PatternStudioPanel({
             <option>Space</option>
           </select>
         </label>
-        <button className="primary-button" onClick={onRunScan} disabled={isBusy}>
+        <button className="primary-button" onClick={onRunScan} disabled={isBusy} title="Run the current regex against the active source immediately.">
           {isBusy ? "Scanning..." : "Match now"}
         </button>
         {activeJobId ? (
-          <button className="ghost-button" onClick={onCancelScan}>
+          <button className="ghost-button" onClick={onCancelScan} title="Request cancellation for the active background scan.">
             Cancel scan
           </button>
         ) : null}
-        <button className="ghost-button" onClick={onCopyReplacement} disabled={!replacement}>
+        <button className="ghost-button" onClick={onCopyReplacement} disabled={!replacement} title="Copy the replacement result for editor-backed text.">
           Copy replacement
         </button>
-        <button className="ghost-button" onClick={onMinimize}>
+        <button className="ghost-button" onClick={onMinimize} title="Collapse these controls into a single row so source and results get more space.">
           Minimize studio
         </button>
       </div>

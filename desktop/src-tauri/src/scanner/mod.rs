@@ -9,10 +9,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
-use self::engine::{build_replacement_preview, translate_python_replacement, RegexEngine};
+use self::engine::{build_replacement_preview, translate_replacement_syntax, RegexEngine};
 use self::response::{
-    build_line_mode_detail, build_line_mode_warnings, delimiter_value, derive_match_value,
-    format_file_size, replacement_disabled_warning, ScanAccumulator,
+    build_line_mode_detail, build_line_mode_warnings, delimiter_value, format_file_size,
+    replacement_disabled_warning, ScanAccumulator,
 };
 use self::scan_job::collect_directory_files;
 pub(crate) use self::scan_job::execute_scan_job;
@@ -173,7 +173,7 @@ pub fn replace_source_text(request: ScanRequest) -> Result<String, String> {
     }
 
     let engine = RegexEngine::compile(&request.pattern, &request.flags)?;
-    let replacement_plan = translate_python_replacement(&request.replacement);
+    let replacement_plan = translate_replacement_syntax(&request.replacement);
     engine.replace_all(text, &replacement_plan.translated)
 }
 
@@ -470,9 +470,9 @@ fn collect_match_output(
     let mut values = Vec::new();
     let mut match_count = 0usize;
 
-    engine.visit_matches(source_text, |full_match, captures, _start, _end| {
+    engine.visit_matches(source_text, |full_match, _captures, _start, _end| {
         match_count += 1;
-        let match_value = derive_match_value(full_match, &captures);
+        let match_value = full_match.to_string();
         if request.unique_only && !seen.insert(match_value.clone()) {
             return Ok(());
         }
@@ -510,9 +510,9 @@ impl<'a> MatchWriter<'a> {
         }
     }
 
-    fn push(&mut self, full_match: &str, captures: Vec<String>) -> Result<(), String> {
+    fn push(&mut self, full_match: &str, _captures: Vec<String>) -> Result<(), String> {
         self.match_count += 1;
-        let match_value = derive_match_value(full_match, &captures);
+        let match_value = full_match.to_string();
         if self.unique_only && !self.seen.insert(match_value.clone()) {
             return Ok(());
         }
