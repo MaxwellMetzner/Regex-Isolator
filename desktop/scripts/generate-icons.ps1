@@ -1,9 +1,29 @@
+param(
+    [switch]$Force
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $desktopRoot = Split-Path -Parent $scriptRoot
 $iconDir = Join-Path $desktopRoot "src-tauri/icons"
+
+$requiredIconNames = @(
+    "32x32.png",
+    "128x128.png",
+    "128x128@2x.png",
+    "icon.png",
+    "icon.ico"
+)
+
+if (-not $Force.IsPresent) {
+    $missingIcons = @($requiredIconNames | Where-Object { -not (Test-Path (Join-Path $iconDir $_)) })
+    if ($missingIcons.Count -eq 0) {
+        Write-Host "Using existing icon set in $iconDir"
+        return
+    }
+}
 
 Add-Type -AssemblyName System.Drawing
 Add-Type @"

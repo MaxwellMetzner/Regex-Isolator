@@ -13,7 +13,9 @@ interface SourcePanelProps {
   sourceModeLabel: string;
   sourceEditorRef: RefObject<HTMLTextAreaElement | null>;
   matchRanges: MatchRange[];
+  wordWrapEnabled: boolean;
   onSourceTextChange: (value: string) => void;
+  onWordWrapChange: (value: boolean) => void;
   onPaste: () => void;
   onPickFile: () => void;
   onClearSource: () => void;
@@ -89,7 +91,9 @@ export function SourcePanel({
   sourceModeLabel,
   sourceEditorRef,
   matchRanges,
+  wordWrapEnabled,
   onSourceTextChange,
+  onWordWrapChange,
   onPaste,
   onPickFile,
   onClearSource,
@@ -118,7 +122,6 @@ export function SourcePanel({
     <article className="panel panel-elevated">
       <div className="panel-heading sticky-row">
         <div>
-          <p className="panel-label">Source</p>
           <h2>{sourceModeLabel}</h2>
         </div>
         <div className="toolbar-row source-toolbar">
@@ -126,6 +129,15 @@ export function SourcePanel({
             <button className="primary-button" onClick={onPaste} title="Replace the editor source with clipboard text.">Paste clipboard</button>
             <button className="ghost-button" onClick={onPickFile} title="Open a text file. Large files stay on disk and scan directly.">Load file</button>
             <button className="ghost-button" onClick={onSaveSource} disabled={Boolean(fileSource)} title="Save the editor text. Loaded editor files ask before overwriting; otherwise you can choose a new file.">Save source</button>
+            <button
+              className={`ghost-button ${wordWrapEnabled ? "toggle-button-active" : ""}`}
+              onClick={() => onWordWrapChange(!wordWrapEnabled)}
+              disabled={Boolean(fileSource)}
+              aria-pressed={wordWrapEnabled}
+              title="Toggle line wrapping in the source editor."
+            >
+              {wordWrapEnabled ? "Wrap on" : "Wrap off"}
+            </button>
             <button className="ghost-button" onClick={onClearSource} title="Clear only the source and current results. The regex pattern and options stay as they are.">Clear</button>
           </div>
           <div className="button-group button-group-separated">
@@ -159,7 +171,7 @@ export function SourcePanel({
           <p className="support-copy">The file stays on disk and is scanned by the Rust backend without loading the whole thing into the editor.</p>
         </div>
       ) : (
-        <div className="source-editor-shell">
+        <div className={`source-editor-shell ${wordWrapEnabled ? "word-wrap-on" : "word-wrap-off"}`}>
           <div ref={highlightLayerRef} className="source-editor-highlight-layer" aria-hidden="true">
             {highlightSegments.map((segment, index) => (
               segment.highlight ? (
@@ -178,7 +190,7 @@ export function SourcePanel({
             onScroll={handleEditorScroll}
             aria-label="Source text"
             spellCheck={false}
-            wrap="soft"
+            wrap={wordWrapEnabled ? "soft" : "off"}
           />
         </div>
       )}

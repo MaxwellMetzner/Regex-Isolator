@@ -25,11 +25,14 @@ export function ResultsPanel({
     }
   }
 
+  function displayText(value: string) {
+    return value || "(empty match)";
+  }
+
   return (
     <article className="panel panel-soft result-panel">
       <div className="panel-heading sticky-row">
         <div>
-          <p className="panel-label">Results</p>
           <h2>{scanResponse ? `${scanResponse.totalMatches.toLocaleString()} matches` : "No results yet"}</h2>
         </div>
         <div className="toolbar-row">
@@ -59,7 +62,22 @@ export function ResultsPanel({
                 }}
               >
                 <span className="output-line-icon" aria-hidden="true">{"\u21b5"}</span>
-                <span className="output-match-text">{record.match || "(empty match)"}</span>
+                <div className="output-match-body">
+                  <div className="output-match-text">{displayText(record.match)}</div>
+                  {record.captures.length > 0 ? (
+                    <div className="output-capture-detail">
+                      <span className="output-full-match">Full: {displayText(record.fullMatch)}</span>
+                      <div className="output-capture-list" aria-label="Capture groups">
+                        {record.captures.map((capture, captureIndex) => (
+                          <span key={`${index}-${captureIndex}-${capture}`} className="output-capture-chip">
+                            <strong>${captureIndex + 1}</strong>
+                            <span>{displayText(capture)}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>

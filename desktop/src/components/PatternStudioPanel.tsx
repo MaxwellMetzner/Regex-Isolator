@@ -60,7 +60,6 @@ export function PatternStudioPanel({
     <article className="panel panel-elevated">
       <div className="panel-heading">
         <div>
-          <p className="panel-label">Pattern Studio</p>
           <h2>Pattern and scan options</h2>
         </div>
         <span
@@ -97,7 +96,7 @@ export function PatternStudioPanel({
         <label title="Show each extracted match value only once."><input type="checkbox" checked={uniqueOnly} onChange={(event) => onUniqueOnlyChange(event.target.checked)} /> Unique only</label>
       </div>
 
-      <div className="toolbar-row">
+      <div className="toolbar-row scan-toolbar">
         <label className="field compact-field">
           <span>Delimiter</span>
           <select value={delimiter} onChange={(event) => onDelimiterChange(event.target.value as Delimiter)}>
@@ -107,20 +106,25 @@ export function PatternStudioPanel({
             <option>Space</option>
           </select>
         </label>
-        <button className="primary-button" onClick={onRunScan} disabled={isBusy} title="Run the current regex against the active source immediately.">
-          {isBusy ? "Scanning..." : "Match now"}
-        </button>
-        {activeJobId ? (
-          <button className="ghost-button" onClick={onCancelScan} title="Request cancellation for the active background scan.">
-            Cancel scan
-          </button>
-        ) : null}
-        <button className="ghost-button" onClick={onCopyReplacement} disabled={!replacement} title="Copy the replacement result for editor-backed text.">
-          Copy replacement
-        </button>
-        <button className="ghost-button" onClick={onMinimize} title="Collapse these controls into a single row so source and results get more space.">
-          Minimize studio
-        </button>
+        <div className="action-field">
+          <span>Actions</span>
+          <div className="toolbar-row action-button-row">
+            <button className="primary-button" onClick={onRunScan} disabled={isBusy} title="Run the current regex against the active source immediately.">
+              {isBusy ? "Scanning..." : "Match now"}
+            </button>
+            {activeJobId ? (
+              <button className="ghost-button" onClick={onCancelScan} title="Request cancellation for the active background scan.">
+                Cancel scan
+              </button>
+            ) : null}
+            <button className="ghost-button" onClick={onCopyReplacement} disabled={!replacement} title="Copy the replacement result for editor-backed text.">
+              Copy replacement
+            </button>
+            <button className="ghost-button" onClick={onMinimize} title="Collapse these controls into a single row so source and results get more space.">
+              Minimize studio
+            </button>
+          </div>
+        </div>
       </div>
     </article>
   );

@@ -52,7 +52,15 @@ function capturesFor(match: RegExpExecArray) {
 }
 
 function displayValue(fullMatch: string, captures: string[]) {
-  return captures.length > 0 ? captures[0] ?? "" : fullMatch;
+  if (captures.length === 0) {
+    return fullMatch;
+  }
+
+  if (captures.length === 1) {
+    return captures[0] ?? "";
+  }
+
+  return captures.filter(Boolean).join("");
 }
 
 function eachMatch(request: ScanRequest, callback: (match: RegExpExecArray) => void) {

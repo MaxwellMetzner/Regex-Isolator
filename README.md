@@ -2,6 +2,10 @@
 
 Regex Isolator is a desktop-first regex workbench for quickly extracting, inspecting, transforming, and exporting matches from text. It runs as a React/Vite app in the browser during development and as a Tauri 2 app with a Rust scan backend for local-file workflows.
 
+## Screenshot
+
+![Regex Isolator main page](screenshot.jpg)
+
 ## Windows Download
 
 If you just want to use Regex Isolator on Windows, download the latest setup executable from the latest release.

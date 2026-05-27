@@ -217,17 +217,6 @@ interface EditorSourceFile {
   name: string;
 }
 
-function numericStyleValue(value: string, fallback: number) {
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function lineHeightForElement(element: HTMLElement) {
-  const style = window.getComputedStyle(element);
-  const fontSize = numericStyleValue(style.fontSize, 14);
-  return numericStyleValue(style.lineHeight, fontSize * 1.38);
-}
-
 function measureTextareaOffset(editor: HTMLTextAreaElement, offset: number) {
   const style = window.getComputedStyle(editor);
   const mirror = document.createElement("div");
@@ -269,10 +258,9 @@ function measureTextareaOffset(editor: HTMLTextAreaElement, offset: number) {
 
 function scrollTextareaRangeIntoView(editor: HTMLTextAreaElement, start: number) {
   const markerTop = measureTextareaOffset(editor, start);
-  const lineHeight = lineHeightForElement(editor);
-  const centeredTop = markerTop - (editor.clientHeight - lineHeight) / 2;
+  const paddingTop = Number.parseFloat(window.getComputedStyle(editor).paddingTop) || 0;
   const maxScrollTop = Math.max(0, editor.scrollHeight - editor.clientHeight);
-  editor.scrollTop = Math.max(0, Math.min(maxScrollTop, centeredTop));
+  editor.scrollTop = Math.max(0, Math.min(maxScrollTop, markerTop - paddingTop));
 }
 
 function selectEditableRange(editor: HTMLTextAreaElement, start: number, end: number) {
@@ -310,6 +298,7 @@ export default function App() {
   const [jobProgress, setJobProgress] = useState<ScanJobEvent | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [isPatternStudioMinimized, setIsPatternStudioMinimized] = useState(false);
+  const [wordWrapEnabled, setWordWrapEnabled] = useState(true);
 
   useEffect(() => {
     window.localStorage.setItem(CUSTOM_PRESETS_KEY, JSON.stringify(customPresets));
@@ -700,8 +689,8 @@ export default function App() {
     setStatusMessage(`Saved preset "${name}".`);
   }
 
-  function handleDeletePreset() {
-    const name = presetName.trim() || selectedPreset;
+  function handleDeletePreset(presetToDelete?: string) {
+    const name = presetToDelete?.trim() || presetName.trim() || selectedPreset;
     if (!name || !customPresets[name]) {
       setStatusMessage("Select a saved custom preset to delete.");
       return;
@@ -712,8 +701,12 @@ export default function App() {
       delete next[name];
       return next;
     });
-    setPresetName("");
-    setSelectedPreset(DEFAULT_PRESET_PLACEHOLDER);
+    if (presetName.trim() === name) {
+      setPresetName("");
+    }
+    if (selectedPreset === name) {
+      setSelectedPreset(DEFAULT_PRESET_PLACEHOLDER);
+    }
     setStatusMessage(`Deleted preset "${name}".`);
   }
 
@@ -1017,7 +1010,7 @@ export default function App() {
     : statusMessage || scanResponse?.detail || "Ready";
 
   return (
-    <div className={`app-shell ${isPatternStudioMinimized ? "studio-minimized" : ""}`}>
+    <div className={["app-shell", isPatternStudioMinimized ? "studio-minimized" : "", showHelp ? "help-open" : ""].filter(Boolean).join(" ")}>
       <header className="app-header">
         <div>
           <p className="eyebrow">Regex Isolator</p>
@@ -1090,7 +1083,9 @@ export default function App() {
           sourceModeLabel={displayedSourceModeLabel}
           sourceEditorRef={sourceEditorRef}
           matchRanges={sourceMatchRanges}
+          wordWrapEnabled={wordWrapEnabled}
           onSourceTextChange={handleSourceTextChange}
+          onWordWrapChange={setWordWrapEnabled}
           onPaste={() => void handlePaste()}
           onPickFile={() => void handlePickFile()}
           onClearSource={() => void handleClearSource()}
