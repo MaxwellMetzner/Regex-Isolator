@@ -1,6 +1,6 @@
 import { useMemo, useRef, type ChangeEvent, type RefObject, type UIEvent } from "react";
 
-import type { FileSource } from "../types";
+import type { DirectorySource, FileSource } from "../types";
 
 interface MatchRange {
   start: number;
@@ -9,6 +9,7 @@ interface MatchRange {
 
 interface SourcePanelProps {
   fileSource: FileSource | null;
+  directorySource: DirectorySource | null;
   sourceText: string;
   sourceModeLabel: string;
   sourceEditorRef: RefObject<HTMLTextAreaElement | null>;
@@ -18,6 +19,7 @@ interface SourcePanelProps {
   onWordWrapChange: (value: boolean) => void;
   onPaste: () => void;
   onPickFile: () => void;
+  onPickDirectory: () => void;
   onClearSource: () => void;
   onSaveSource: () => void;
   onSaveWithoutMatches: () => void;
@@ -87,6 +89,7 @@ function segmentKey(segment: { text: string; highlight: boolean }, index: number
 
 export function SourcePanel({
   fileSource,
+  directorySource,
   sourceText,
   sourceModeLabel,
   sourceEditorRef,
@@ -96,6 +99,7 @@ export function SourcePanel({
   onWordWrapChange,
   onPaste,
   onPickFile,
+  onPickDirectory,
   onClearSource,
   onSaveSource,
   onSaveWithoutMatches,
@@ -121,34 +125,52 @@ export function SourcePanel({
   return (
     <article className="panel panel-elevated">
       <div className="panel-heading sticky-row">
-        <div>
+        <div className="panel-title-block">
+          <span className="panel-index">01</span>
+          <div>
+            <p className="section-kicker">Input</p>
           <h2>{sourceModeLabel}</h2>
+          </div>
         </div>
         <div className="toolbar-row source-toolbar">
-          <div className="button-group">
-            <button className="primary-button" onClick={onPaste} title="Replace the editor source with clipboard text.">Paste clipboard</button>
-            <button className="ghost-button" onClick={onPickFile} title="Open a text file. Large files stay on disk and scan directly.">Load file</button>
-            <button className="ghost-button" onClick={onSaveSource} disabled={Boolean(fileSource)} title="Save the editor text. Loaded editor files ask before overwriting; otherwise you can choose a new file.">Save source</button>
-            <button
-              className={`ghost-button ${wordWrapEnabled ? "toggle-button-active" : ""}`}
-              onClick={() => onWordWrapChange(!wordWrapEnabled)}
-              disabled={Boolean(fileSource)}
-              aria-pressed={wordWrapEnabled}
-              title="Toggle line wrapping in the source editor."
-            >
-              {wordWrapEnabled ? "Wrap on" : "Wrap off"}
-            </button>
-            <button className="ghost-button" onClick={onClearSource} title="Clear only the source and current results. The regex pattern and options stay as they are.">Clear</button>
-          </div>
-          <div className="button-group button-group-separated">
-            <button className="ghost-button" onClick={onDeleteMatches} disabled={Boolean(fileSource)} title="Remove the current regex matches from the editor text.">Delete matches</button>
-            <button className="ghost-button" onClick={onKeepMatches} disabled={Boolean(fileSource)} title="Replace the editor text with only the full regex matches, joined by the selected delimiter. Capture groups do not change this action.">Keep only matches</button>
-            <button className="ghost-button" onClick={onSaveWithoutMatches} title="Save a copy of the source with the current regex matches removed.">Save without matches</button>
-          </div>
+          <button className="ghost-button compact-button" onClick={onPaste} title="Replace the editor source with clipboard text.">Paste</button>
+          <button className="primary-button compact-button" onClick={onPickFile} title="Open a text file. Large files stay on disk and scan directly.">Open file</button>
+          <details className="action-menu">
+            <summary className="ghost-button compact-button">Tools <span aria-hidden="true">⌄</span></summary>
+            <div className="action-menu-popover">
+              <p>Editor</p>
+              <button onClick={onPickDirectory}>Open folder</button>
+              <button onClick={onSaveSource} disabled={Boolean(fileSource || directorySource)}>Save source</button>
+              <button onClick={() => onWordWrapChange(!wordWrapEnabled)} disabled={Boolean(fileSource || directorySource)}>{wordWrapEnabled ? "Turn wrapping off" : "Turn wrapping on"}</button>
+              <button onClick={onClearSource}>Clear source</button>
+              <p>Transform</p>
+              <button onClick={onDeleteMatches} disabled={Boolean(fileSource || directorySource)}>Delete matches</button>
+              <button onClick={onKeepMatches} disabled={Boolean(fileSource || directorySource)}>Keep only matches</button>
+              <button onClick={onSaveWithoutMatches} disabled={Boolean(directorySource)}>Save without matches</button>
+            </div>
+          </details>
         </div>
       </div>
 
-      {fileSource ? (
+      {directorySource ? (
+        <div className="file-card">
+          <div>
+            <p className="panel-label">Selected folder</p>
+            <h3>{directorySource.name}</h3>
+          </div>
+          <dl>
+            <div>
+              <dt>Path</dt>
+              <dd>{directorySource.path}</dd>
+            </div>
+            <div>
+              <dt>Mode</dt>
+              <dd>Recursive line-based scan</dd>
+            </div>
+          </dl>
+          <p className="support-copy">Files stay on disk while the Rust backend scans the folder recursively with progress and cancellation.</p>
+        </div>
+      ) : fileSource ? (
         <div className="file-card">
           <div>
             <p className="panel-label">Selected large file</p>

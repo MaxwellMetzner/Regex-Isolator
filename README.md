@@ -33,8 +33,13 @@ If WebView2 is already installed, setup is effectively just the app install. If 
 
 - Editor-backed regex scanning with source-side match highlighting and result-click jump navigation.
 - Large-file mode that keeps files over 16 MiB on disk and scans them line by line from Rust.
+- Recursive folder scanning with background progress, cancellation, and file-aware structured results.
 - Fast regex engine path with a `fancy-regex` fallback for advanced constructs such as lookaround.
-- Collapsible Pattern Studio with flags, delimiter controls, replacement copy, custom presets, and regex help.
+- Focused two-pane workspace with a pinned expression bar and secondary controls tucked behind contextual menus.
+- Collapsible Pattern Studio with flags, delimiter controls, replacement copy, custom presets, and a reference drawer.
+- Click-to-insert expression builder with editable snippet placeholders and Tab navigation.
+- Live validation against the actual Rust regex engines, plus structural, empty-match, compatibility, and performance diagnostics.
+- Deferred in-result filtering, copy-visible-results, and `Ctrl`/`Cmd` + `Enter` matching.
 - Result exports as TXT, CSV, or JSONL.
 - Source transforms to delete matches or keep only full matches in the editor.
 - Save source text or save a copy with current matches removed.

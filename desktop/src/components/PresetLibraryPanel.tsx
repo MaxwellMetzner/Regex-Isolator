@@ -56,10 +56,11 @@ export function PresetLibraryPanel({
   }
 
   return (
-    <article className="panel panel-soft preset-panel">
+    <article className="panel preset-panel">
       <div className="panel-heading">
         <div>
-          <h2>Presets</h2>
+          <p className="section-kicker">Library</p>
+          <h2>Saved workflows</h2>
         </div>
       </div>
 

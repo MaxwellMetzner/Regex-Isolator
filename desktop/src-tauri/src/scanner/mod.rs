@@ -28,6 +28,55 @@ pub struct RegexFlags {
     pub dot_all: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatternValidationResponse {
+    pub valid: bool,
+    pub engine: Option<String>,
+    pub engine_detail: Option<String>,
+    pub error: Option<String>,
+    pub matches_empty: bool,
+}
+
+pub(crate) fn validate_pattern(
+    pattern: &str,
+    flags: &RegexFlags,
+) -> PatternValidationResponse {
+    match RegexEngine::compile(pattern, flags) {
+        Ok(engine) => {
+            let mut matches_empty = false;
+            let empty_check = engine.visit_matches("", |_full, _captures, _start, _end| {
+                matches_empty = true;
+                Ok(())
+            });
+
+            match empty_check {
+                Ok(()) => PatternValidationResponse {
+                    valid: true,
+                    engine: Some(engine.label().to_string()),
+                    engine_detail: Some(engine.detail()),
+                    error: None,
+                    matches_empty,
+                },
+                Err(error) => PatternValidationResponse {
+                    valid: false,
+                    engine: Some(engine.label().to_string()),
+                    engine_detail: Some(engine.detail()),
+                    error: Some(error),
+                    matches_empty: false,
+                },
+            }
+        }
+        Err(error) => PatternValidationResponse {
+            valid: false,
+            engine: None,
+            engine_detail: None,
+            error: Some(error),
+            matches_empty: false,
+        },
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanRequest {
@@ -634,4 +683,46 @@ fn write_cleaned_file(
 fn read_text_lossy(path: &str) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::{validate_pattern, RegexFlags};
+
+    fn flags() -> RegexFlags {
+        RegexFlags {
+            ignore_case: false,
+            multiline: false,
+            dot_all: false,
+        }
+    }
+
+    #[test]
+    fn validates_fast_engine_pattern() {
+        let validation = validate_pattern(r"\b[A-Z]{2}\d{4}\b", &flags());
+        assert!(validation.valid);
+        assert_eq!(validation.engine.as_deref(), Some("fast-regex"));
+        assert!(!validation.matches_empty);
+    }
+
+    #[test]
+    fn falls_back_for_lookaround() {
+        let validation = validate_pattern(r"foo(?=bar)", &flags());
+        assert!(validation.valid);
+        assert_eq!(validation.engine.as_deref(), Some("fancy-regex fallback"));
+    }
+
+    #[test]
+    fn returns_compile_error() {
+        let validation = validate_pattern("(", &flags());
+        assert!(!validation.valid);
+        assert!(validation.error.is_some());
+    }
+
+    #[test]
+    fn detects_empty_matches() {
+        let validation = validate_pattern(r"\d*", &flags());
+        assert!(validation.valid);
+        assert!(validation.matches_empty);
+    }
 }

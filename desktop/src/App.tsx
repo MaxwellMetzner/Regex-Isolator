@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -10,6 +10,7 @@ import { RegexHelpPanel } from "./components/RegexHelpPanel";
 import { ResultsPanel } from "./components/ResultsPanel";
 import { SourcePanel } from "./components/SourcePanel";
 import { analyzePattern } from "./lib/patternAnalysis";
+import type { RegexHelpRow } from "./lib/regexHelp";
 import { BUILTIN_PRESETS, createPresetPayload, DEFAULT_PRESET_PLACEHOLDER } from "./lib/presets";
 import {
   deleteBrowserMatches,
@@ -22,6 +23,8 @@ import type {
   DirectorySource,
   FileSource,
   LoadSourceResponse,
+  PatternValidationResponse,
+  PatternValidationState,
   SavedPreset,
   ScanJobEvent,
   ScanRecord,
@@ -217,6 +220,42 @@ interface EditorSourceFile {
   name: string;
 }
 
+interface SnippetSession {
+  ranges: Array<{ start: number; end: number }>;
+  index: number;
+}
+
+const EMPTY_PATTERN_VALIDATION: PatternValidationState = {
+  status: "idle",
+  valid: false,
+  engine: null,
+  engineDetail: null,
+  error: null,
+  matchesEmpty: false,
+};
+
+function validateBrowserPattern(pattern: string, flags: { ignoreCase: boolean; multiline: boolean; dotAll: boolean }): PatternValidationResponse {
+  try {
+    const flagText = `${flags.ignoreCase ? "i" : ""}${flags.multiline ? "m" : ""}${flags.dotAll ? "s" : ""}`;
+    const regex = new RegExp(pattern, flagText);
+    return {
+      valid: true,
+      engine: "Browser RegExp",
+      engineDetail: "Validated with the browser's JavaScript regular expression engine.",
+      error: null,
+      matchesEmpty: regex.test(""),
+    };
+  } catch (error) {
+    return {
+      valid: false,
+      engine: "Browser RegExp",
+      engineDetail: null,
+      error: getErrorMessage(error),
+      matchesEmpty: false,
+    };
+  }
+}
+
 function measureTextareaOffset(editor: HTMLTextAreaElement, offset: number) {
   const style = window.getComputedStyle(editor);
   const mirror = document.createElement("div");
@@ -274,6 +313,9 @@ function selectEditableRange(editor: HTMLTextAreaElement, start: number, end: nu
 
 export default function App() {
   const sourceEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const patternInputRef = useRef<HTMLInputElement | null>(null);
+  const snippetSessionRef = useRef<SnippetSession | null>(null);
+  const lastPatternSelectionRef = useRef<{ start: number; end: number } | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
   const [pattern, setPattern] = useState("");
   const [replacement, setReplacement] = useState("");
@@ -297,8 +339,9 @@ export default function App() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [jobProgress, setJobProgress] = useState<ScanJobEvent | null>(null);
   const [showHelp, setShowHelp] = useState(false);
-  const [isPatternStudioMinimized, setIsPatternStudioMinimized] = useState(false);
+  const [isPatternStudioMinimized, setIsPatternStudioMinimized] = useState(true);
   const [wordWrapEnabled, setWordWrapEnabled] = useState(true);
+  const [patternValidation, setPatternValidation] = useState<PatternValidationState>(EMPTY_PATTERN_VALIDATION);
 
   useEffect(() => {
     window.localStorage.setItem(CUSTOM_PRESETS_KEY, JSON.stringify(customPresets));
@@ -373,6 +416,137 @@ export default function App() {
     };
   }, [liveMatching, fileSource, directorySource, pattern, replacement, sourceText, ignoreCase, multiline, dotAll, uniqueOnly, delimiter]);
 
+  useEffect(() => {
+    if (!pattern) {
+      setPatternValidation(EMPTY_PATTERN_VALIDATION);
+      return;
+    }
+
+    let cancelled = false;
+    setPatternValidation((current) => ({ ...current, status: "checking", error: null }));
+    const handle = window.setTimeout(() => {
+      const flags = { ignoreCase, multiline, dotAll };
+      const validation = IS_TAURI_RUNTIME
+        ? invoke<PatternValidationResponse>("validate_pattern", { pattern, flags })
+        : Promise.resolve(validateBrowserPattern(pattern, flags));
+
+      void validation.then((response) => {
+        if (!cancelled) {
+          setPatternValidation({ ...response, status: response.valid ? "valid" : "invalid" });
+        }
+      }).catch((error) => {
+        if (!cancelled) {
+          setPatternValidation({
+            status: "invalid",
+            valid: false,
+            engine: null,
+            engineDetail: null,
+            error: getErrorMessage(error),
+            matchesEmpty: false,
+          });
+        }
+      });
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [pattern, ignoreCase, multiline, dotAll]);
+
+  useEffect(() => {
+    function handleKeyboardShortcut(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        void runScan();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyboardShortcut);
+    return () => window.removeEventListener("keydown", handleKeyboardShortcut);
+  });
+
+  function handleInsertRegexSnippet(snippet: RegexHelpRow) {
+    if (!snippet.insert) {
+      return;
+    }
+
+    const rememberedSelection = lastPatternSelectionRef.current;
+    const selectionStart = rememberedSelection?.start ?? pattern.length;
+    const selectionEnd = rememberedSelection?.end ?? selectionStart;
+    const selectedText = pattern.slice(selectionStart, selectionEnd);
+    let insertText = snippet.insert;
+    let ranges = (snippet.placeholders ?? []).map((range) => ({ ...range }));
+
+    if (selectedText && snippet.wrapPlaceholderIndex !== undefined && ranges[snippet.wrapPlaceholderIndex]) {
+      const wrappedRange = ranges[snippet.wrapPlaceholderIndex];
+      const delta = selectedText.length - (wrappedRange.end - wrappedRange.start);
+      insertText = `${insertText.slice(0, wrappedRange.start)}${selectedText}${insertText.slice(wrappedRange.end)}`;
+      ranges = ranges
+        .filter((_range, index) => index !== snippet.wrapPlaceholderIndex)
+        .map((range) => range.start > wrappedRange.start
+          ? { start: range.start + delta, end: range.end + delta }
+          : range);
+    }
+
+    const nextPattern = `${pattern.slice(0, selectionStart)}${insertText}${pattern.slice(selectionEnd)}`;
+    const absoluteRanges = ranges.map((range) => ({
+      start: selectionStart + range.start,
+      end: selectionStart + range.end,
+    }));
+    setPattern(nextPattern);
+    snippetSessionRef.current = absoluteRanges.length ? { ranges: absoluteRanges, index: 0 } : null;
+
+    window.requestAnimationFrame(() => {
+      const nextInput = patternInputRef.current;
+      if (!nextInput) return;
+      nextInput.focus();
+      if (absoluteRanges.length) {
+        nextInput.setSelectionRange(absoluteRanges[0].start, absoluteRanges[0].end);
+        lastPatternSelectionRef.current = absoluteRanges[0];
+      } else {
+        const caret = selectionStart + insertText.length;
+        nextInput.setSelectionRange(caret, caret);
+        lastPatternSelectionRef.current = { start: caret, end: caret };
+      }
+    });
+  }
+
+  function handlePatternKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      snippetSessionRef.current = null;
+      return;
+    }
+    if (event.key !== "Tab" || event.shiftKey || !snippetSessionRef.current) {
+      return;
+    }
+
+    const session = snippetSessionRef.current;
+    const currentRange = session.ranges[session.index];
+    const cursor = event.currentTarget.selectionEnd ?? currentRange.end;
+    const delta = cursor - currentRange.end;
+    for (let index = session.index + 1; index < session.ranges.length; index += 1) {
+      session.ranges[index] = {
+        start: session.ranges[index].start + delta,
+        end: session.ranges[index].end + delta,
+      };
+    }
+
+    if (session.index >= session.ranges.length - 1) {
+      snippetSessionRef.current = null;
+      return;
+    }
+
+    event.preventDefault();
+    session.index += 1;
+    const nextRange = session.ranges[session.index];
+    lastPatternSelectionRef.current = nextRange;
+    window.requestAnimationFrame(() => {
+      patternInputRef.current?.focus();
+      patternInputRef.current?.setSelectionRange(nextRange.start, nextRange.end);
+    });
+  }
+
   function resetScanResults(options?: { clearError?: boolean }) {
     setScanResponse(null);
     setJobProgress(null);
@@ -413,6 +587,16 @@ export default function App() {
   function applyFileSource(nextFileSource: FileSource, note: string) {
     setFileSource(nextFileSource);
     setDirectorySource(null);
+    setEditorSourceFile(null);
+    setSourceText("");
+    setLiveMatching(false);
+    resetScanResults();
+    setStatusMessage(note);
+  }
+
+  function applyDirectorySource(nextDirectorySource: DirectorySource, note: string) {
+    setDirectorySource(nextDirectorySource);
+    setFileSource(null);
     setEditorSourceFile(null);
     setSourceText("");
     setLiveMatching(false);
@@ -468,10 +652,17 @@ export default function App() {
       return;
     }
 
+    if (patternValidation.status === "invalid") {
+      setScanResponse(null);
+      setErrorMessage(patternValidation.error ?? "The expression is not valid.");
+      setStatusMessage("Fix the expression error before matching.");
+      return;
+    }
+
     if (!sourceText && !fileSource) {
       if (!directorySource) {
         setScanResponse(null);
-        setStatusMessage("Paste text or load a file.");
+        setStatusMessage("Paste text, load a file, or choose a folder.");
         return;
       }
     }
@@ -485,7 +676,7 @@ export default function App() {
 
     if (!sourceText) {
       setScanResponse(null);
-      setStatusMessage("Paste text or load a file.");
+      setStatusMessage("Paste text, load a file, or choose a folder.");
       return;
     }
 
@@ -546,6 +737,29 @@ export default function App() {
     } catch (error) {
       handleOperationError(error);
     }
+  }
+
+  async function handlePickDirectory() {
+    if (!IS_TAURI_RUNTIME) {
+      setStatusMessage("Folder scanning is available in the desktop app.");
+      return;
+    }
+
+    const path = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose a folder to scan",
+    });
+
+    if (typeof path !== "string") {
+      return;
+    }
+
+    setSelectedPreset(DEFAULT_PRESET_PLACEHOLDER);
+    applyDirectorySource(
+      { path, name: pathLabel(path) },
+      `Selected ${pathLabel(path)} for recursive background scanning.`,
+    );
   }
 
   async function handlePaste() {
@@ -948,6 +1162,20 @@ export default function App() {
     }
   }
 
+  async function handleCopyResults(records: ScanRecord[]) {
+    if (!records.length) {
+      setStatusMessage("There are no visible results to copy.");
+      return;
+    }
+
+    try {
+      await copyText(records.map((record) => record.match).join("\n"));
+      setStatusMessage(`Copied ${records.length.toLocaleString()} visible match(es) to the clipboard.`);
+    } catch (error) {
+      handleOperationError(error);
+    }
+  }
+
   async function handleCancelScan() {
     if (!activeJobIdRef.current) {
       return;
@@ -1012,14 +1240,20 @@ export default function App() {
   return (
     <div className={["app-shell", isPatternStudioMinimized ? "studio-minimized" : "", showHelp ? "help-open" : ""].filter(Boolean).join(" ")}>
       <header className="app-header">
-        <div>
-          <p className="eyebrow">Regex Isolator</p>
-          <h1>Regex Isolator</h1>
+        <div className="brand-lockup">
+          <span className="brand-mark" aria-hidden="true">R<span>/</span></span>
+          <div>
+            <h1>Regex Isolator</h1>
+            <p className="brand-tagline">Extract · inspect · transform</p>
+          </div>
         </div>
         <div className="header-actions">
-          <p className="app-status" role="status" aria-live="polite" title={displayedStatusMessage}>{displayedStatusMessage}</p>
-          <button className="ghost-button" onClick={() => setShowHelp((current) => !current)} title="Show or hide the regex syntax reference.">
-            {showHelp ? "Hide help" : "Regex help"}
+          <p className="app-status" role="status" aria-live="polite" title={displayedStatusMessage}>
+            <span className={isBusy ? "status-pulse status-pulse-active" : "status-pulse"} aria-hidden="true" />
+            {displayedStatusMessage}
+          </p>
+          <button className={`ghost-button compact-button ${showHelp ? "toggle-button-active" : ""}`} onClick={() => setShowHelp((current) => !current)} title="Show or hide the regex syntax reference.">
+            Reference
           </button>
         </div>
       </header>
@@ -1030,7 +1264,11 @@ export default function App() {
           pattern={pattern}
           isBusy={isBusy}
           patternAnalysis={patternAnalysis}
+          patternValidation={patternValidation}
+          patternInputRef={patternInputRef}
           onPatternChange={setPattern}
+          onPatternKeyDown={handlePatternKeyDown}
+          onPatternSelectionChange={(start, end) => { lastPatternSelectionRef.current = { start, end }; }}
           onRunScan={() => void runScan()}
           onRestore={() => setIsPatternStudioMinimized(false)}
         />
@@ -1040,6 +1278,8 @@ export default function App() {
             modeLabel={modeLabel}
             hasBackgroundSource={Boolean(backgroundSource)}
             patternAnalysis={patternAnalysis}
+            patternValidation={patternValidation}
+            patternInputRef={patternInputRef}
             liveMatching={liveMatching}
             pattern={pattern}
             replacement={replacement}
@@ -1051,6 +1291,8 @@ export default function App() {
             isBusy={isBusy}
             activeJobId={activeJobId}
             onPatternChange={setPattern}
+            onPatternKeyDown={handlePatternKeyDown}
+            onPatternSelectionChange={(start, end) => { lastPatternSelectionRef.current = { start, end }; }}
             onReplacementChange={setReplacement}
             onLiveMatchingChange={setLiveMatching}
             onIgnoreCaseChange={setIgnoreCase}
@@ -1079,6 +1321,7 @@ export default function App() {
       <section className="workspace-grid">
         <SourcePanel
           fileSource={fileSource}
+          directorySource={directorySource}
           sourceText={sourceText}
           sourceModeLabel={displayedSourceModeLabel}
           sourceEditorRef={sourceEditorRef}
@@ -1088,6 +1331,7 @@ export default function App() {
           onWordWrapChange={setWordWrapEnabled}
           onPaste={() => void handlePaste()}
           onPickFile={() => void handlePickFile()}
+          onPickDirectory={() => void handlePickDirectory()}
           onClearSource={() => void handleClearSource()}
           onSaveSource={() => void handleSaveSource()}
           onSaveWithoutMatches={() => void handleSaveCleanedOutput()}
@@ -1102,11 +1346,12 @@ export default function App() {
           onExportTxt={() => void handleExportTxt()}
           onExportCsv={() => void handleExportCsv()}
           onExportJsonl={() => void handleExportJsonl()}
+          onCopyResults={(records) => void handleCopyResults(records)}
           onJumpToRecord={jumpToRecord}
         />
       </section>
 
-      {showHelp ? <RegexHelpPanel /> : null}
+      {showHelp ? <RegexHelpPanel onInsertSnippet={handleInsertRegexSnippet} onClose={() => setShowHelp(false)} /> : null}
     </div>
   );
 }

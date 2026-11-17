@@ -8,7 +8,8 @@ use scanner::{
     replace_source_text as replace_source_text_impl,
     save_cleaned_output as save_cleaned_output_impl, save_jsonl_output as save_jsonl_output_impl,
     save_matches_output as save_matches_output_impl, save_text_output as save_text_output_impl,
-    scan_source as scan_source_impl, ScanJobOutcome, ScanJobProgress, ScanRecord, ScanRequest,
+    scan_source as scan_source_impl, validate_pattern as validate_pattern_impl, PatternValidationResponse,
+    RegexFlags, ScanJobOutcome, ScanJobProgress, ScanRecord, ScanRequest,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -96,6 +97,16 @@ async fn scan_source(request: ScanRequest) -> Result<scanner::ScanResponse, Stri
     tauri::async_runtime::spawn_blocking(move || scan_source_impl(request))
         .await
         .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn validate_pattern(
+    pattern: String,
+    flags: RegexFlags,
+) -> Result<PatternValidationResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || validate_pattern_impl(&pattern, &flags))
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -265,6 +276,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_source_file,
             scan_source,
+            validate_pattern,
             replace_source_text,
             extract_matches_text,
             delete_matches_text,

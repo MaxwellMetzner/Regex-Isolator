@@ -1,10 +1,13 @@
-import type { Delimiter } from "../types";
+import type { KeyboardEvent, RefObject } from "react";
+import type { Delimiter, PatternValidationState } from "../types";
 import type { PatternAnalysis } from "../lib/patternAnalysis";
 
 interface PatternStudioPanelProps {
   modeLabel: string;
   hasBackgroundSource: boolean;
   patternAnalysis: PatternAnalysis;
+  patternValidation: PatternValidationState;
+  patternInputRef: RefObject<HTMLInputElement | null>;
   liveMatching: boolean;
   pattern: string;
   replacement: string;
@@ -16,6 +19,8 @@ interface PatternStudioPanelProps {
   isBusy: boolean;
   activeJobId: string | null;
   onPatternChange: (value: string) => void;
+  onPatternKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  onPatternSelectionChange: (start: number, end: number) => void;
   onReplacementChange: (value: string) => void;
   onLiveMatchingChange: (value: boolean) => void;
   onIgnoreCaseChange: (value: boolean) => void;
@@ -33,6 +38,8 @@ export function PatternStudioPanel({
   modeLabel,
   hasBackgroundSource,
   patternAnalysis,
+  patternValidation,
+  patternInputRef,
   liveMatching,
   pattern,
   replacement,
@@ -44,6 +51,8 @@ export function PatternStudioPanel({
   isBusy,
   activeJobId,
   onPatternChange,
+  onPatternKeyDown,
+  onPatternSelectionChange,
   onReplacementChange,
   onLiveMatchingChange,
   onIgnoreCaseChange,
@@ -57,10 +66,11 @@ export function PatternStudioPanel({
   onMinimize,
 }: PatternStudioPanelProps) {
   return (
-    <article className="panel panel-elevated">
+    <article className="panel pattern-studio-panel">
       <div className="panel-heading">
         <div>
-          <h2>Pattern and scan options</h2>
+          <p className="section-kicker">Expression</p>
+          <h2>Pattern controls</h2>
         </div>
         <span
           className={`mode-pill ${hasBackgroundSource ? "mode-pill-warning" : liveMatching ? "mode-pill-live" : "mode-pill-manual"}`}
@@ -73,7 +83,19 @@ export function PatternStudioPanel({
       <div className="pattern-field-grid">
         <label className="field">
           <span>Pattern</span>
-          <input value={pattern} onChange={(event) => onPatternChange(event.target.value)} placeholder="Enter a regex pattern" />
+          <div className={`pattern-input-shell ${patternValidation.status === "invalid" ? "pattern-input-invalid" : patternValidation.status === "valid" ? "pattern-input-valid" : ""}`}>
+            <span className="pattern-slash" aria-hidden="true">/</span>
+            <input
+              ref={patternInputRef}
+              value={pattern}
+              onChange={(event) => onPatternChange(event.target.value)}
+              onKeyDown={onPatternKeyDown}
+              onSelect={(event) => onPatternSelectionChange(event.currentTarget.selectionStart ?? pattern.length, event.currentTarget.selectionEnd ?? pattern.length)}
+              placeholder="Enter a regular expression"
+              aria-invalid={patternValidation.status === "invalid"}
+            />
+            <span className="pattern-slash" aria-hidden="true">/</span>
+          </div>
         </label>
 
         <label className="field">
@@ -82,18 +104,37 @@ export function PatternStudioPanel({
         </label>
       </div>
 
-      <div className={`pattern-coach pattern-coach-${patternAnalysis.tone}`}>
+      <div className={`pattern-coach pattern-coach-${patternAnalysis.tone}`} aria-live="polite">
         <strong>{patternAnalysis.captureSummary}</strong>
         <span>{patternAnalysis.flagSummary}</span>
         <p>{patternAnalysis.hints.slice(0, 2).join(" ")}</p>
       </div>
 
-      <div className="flag-row">
-        <label title="Run the regex automatically after editor changes. Disabled for file sources."><input type="checkbox" checked={liveMatching} disabled={hasBackgroundSource} onChange={(event) => onLiveMatchingChange(event.target.checked)} /> Auto match</label>
-        <label title="Case-insensitive matching."><input type="checkbox" checked={ignoreCase} onChange={(event) => onIgnoreCaseChange(event.target.checked)} /> Ignore case</label>
-        <label title="Make ^ and $ match the start and end of each line."><input type="checkbox" checked={multiline} onChange={(event) => onMultilineChange(event.target.checked)} /> Multiline</label>
-        <label title="Make . match newline characters too."><input type="checkbox" checked={dotAll} onChange={(event) => onDotAllChange(event.target.checked)} /> Dot all</label>
-        <label title="Show each extracted match value only once."><input type="checkbox" checked={uniqueOnly} onChange={(event) => onUniqueOnlyChange(event.target.checked)} /> Unique only</label>
+      <section className={`pattern-diagnostics pattern-diagnostics-${patternValidation.status}`} aria-label="Expression validation">
+        <div className="pattern-diagnostics-heading">
+          <span className="validation-indicator" aria-hidden="true" />
+          <strong>
+            {patternValidation.status === "idle" ? "Add an expression to validate it" :
+              patternValidation.status === "checking" ? "Checking expression…" :
+                patternValidation.valid ? `Valid · ${patternValidation.engine ?? "regex engine"}` : "Expression needs attention"}
+          </strong>
+        </div>
+        {patternValidation.error ? <p className="validation-error">{patternValidation.error}</p> : null}
+        <p><span>Likely behavior</span>{patternAnalysis.intentSummary}</p>
+        {patternValidation.matchesEmpty ? <p className="validation-warning"><span>Check this</span>The expression can match empty text, which may produce surprising results.</p> : null}
+        {patternAnalysis.issues.length ? (
+          <ul>
+            {patternAnalysis.issues.slice(0, 4).map((issue) => <li key={issue.message} className={`diagnostic-${issue.severity}`}>{issue.message}</li>)}
+          </ul>
+        ) : null}
+      </section>
+
+      <div className="option-strip" aria-label="Pattern options">
+        <label className="option-chip" title="Run the regex automatically after editor changes. Disabled for file sources."><input type="checkbox" checked={liveMatching} disabled={hasBackgroundSource} onChange={(event) => onLiveMatchingChange(event.target.checked)} /> Live results</label>
+        <label className="option-chip" title="Case-insensitive matching."><input type="checkbox" checked={ignoreCase} onChange={(event) => onIgnoreCaseChange(event.target.checked)} /> Ignore case <code>i</code></label>
+        <label className="option-chip" title="Make ^ and $ match the start and end of each line."><input type="checkbox" checked={multiline} onChange={(event) => onMultilineChange(event.target.checked)} /> Multiline <code>m</code></label>
+        <label className="option-chip" title="Make . match newline characters too."><input type="checkbox" checked={dotAll} onChange={(event) => onDotAllChange(event.target.checked)} /> Dot all <code>s</code></label>
+        <label className="option-chip" title="Show each extracted match value only once."><input type="checkbox" checked={uniqueOnly} onChange={(event) => onUniqueOnlyChange(event.target.checked)} /> Unique</label>
       </div>
 
       <div className="toolbar-row scan-toolbar">
@@ -109,8 +150,8 @@ export function PatternStudioPanel({
         <div className="action-field">
           <span>Actions</span>
           <div className="toolbar-row action-button-row">
-            <button className="primary-button" onClick={onRunScan} disabled={isBusy} title="Run the current regex against the active source immediately.">
-              {isBusy ? "Scanning..." : "Match now"}
+            <button className="primary-button" onClick={onRunScan} disabled={isBusy || patternValidation.status === "invalid"} title={patternValidation.status === "invalid" ? "Fix the expression error before matching." : "Run the current regex against the active source immediately."}>
+              {isBusy ? "Scanning..." : "Match"}
             </button>
             {activeJobId ? (
               <button className="ghost-button" onClick={onCancelScan} title="Request cancellation for the active background scan.">
@@ -120,8 +161,8 @@ export function PatternStudioPanel({
             <button className="ghost-button" onClick={onCopyReplacement} disabled={!replacement} title="Copy the replacement result for editor-backed text.">
               Copy replacement
             </button>
-            <button className="ghost-button" onClick={onMinimize} title="Collapse these controls into a single row so source and results get more space.">
-              Minimize studio
+            <button className="ghost-button" onClick={onMinimize} title="Collapse these controls so source and results get more space.">
+              Done
             </button>
           </div>
         </div>

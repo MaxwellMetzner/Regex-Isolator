@@ -6,6 +6,18 @@ export interface RegexFlags {
   dotAll: boolean;
 }
 
+export interface PatternValidationResponse {
+  valid: boolean;
+  engine?: string | null;
+  engineDetail?: string | null;
+  error?: string | null;
+  matchesEmpty: boolean;
+}
+
+export interface PatternValidationState extends PatternValidationResponse {
+  status: "idle" | "checking" | "valid" | "invalid";
+}
+
 export interface FileSource {
   path: string;
   name: string;
